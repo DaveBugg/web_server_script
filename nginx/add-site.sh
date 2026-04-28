@@ -222,10 +222,10 @@ server {
 }
 
 # HTTPS — PHP-FPM + HTTP/2
+# Use legacy listen ssl http2 for compat with Nginx 1.18-1.24 (Debian 12, Ubuntu 22).
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    ##http2 on;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name $DOMAIN www.$DOMAIN;
 
     root /www/$DOMAIN/www;
@@ -430,10 +430,8 @@ if [ "$SSL_SETUP_FLAG" = true ]; then
     if certbot --nginx --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email \
         --redirect $CERTBOT_DOMAINS; then
         echo "SSL certificate installed."
-        # Uncomment our hardening lines (http2 on, real cert paths, TLS protocol)
-        # NOTE: certbot will already have rewritten ssl_certificate paths to point
-        # at the Let's Encrypt files; we just enable http2 and TLS protocols.
-        sed -i 's/##http2 on;/http2 on;/'                       /etc/nginx/sites-available/$DOMAIN
+        # Certbot already rewrote ssl_certificate paths. Just uncomment our
+        # extra TLS hardening directives (http2 is in the listen line already).
         sed -i 's/##ssl_protocols TLSv1.2 TLSv1.3;/ssl_protocols TLSv1.2 TLSv1.3;/' /etc/nginx/sites-available/$DOMAIN
         sed -i 's/##ssl_ciphers HIGH:!aNULL:!MD5;/ssl_ciphers HIGH:!aNULL:!MD5;/'   /etc/nginx/sites-available/$DOMAIN
         sed -i 's/##ssl_prefer_server_ciphers off;/ssl_prefer_server_ciphers off;/' /etc/nginx/sites-available/$DOMAIN

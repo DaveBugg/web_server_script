@@ -286,6 +286,9 @@ add_header X-Frame-Options DENY always;
 add_header X-XSS-Protection "1; mode=block" always;
 EOF
 
+# Use the legacy `listen ... ssl http2;` syntax — works on Nginx 1.18+ (Debian 12)
+# AND on Nginx 1.25+ (just emits a deprecation warning). The new `http2 on;`
+# directive is 1.25+ only and would error on older nginx.
 cat > /etc/nginx/sites-available/000-default <<EOF
 # Default catch-all: drop bare-IP HTTP/HTTPS requests
 server {
@@ -296,9 +299,8 @@ server {
 }
 
 server {
-    listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
-    http2 on;
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
     server_name _;
     ssl_certificate     /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
@@ -511,9 +513,8 @@ server {
 }
 
 server {
-    listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
-    http2 on;
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
     server_name _;
     ssl_certificate     /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
