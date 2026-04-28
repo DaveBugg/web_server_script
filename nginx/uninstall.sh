@@ -57,7 +57,7 @@ SITE_USERS=()
 for pool in /etc/php/*/fpm/pool.d/*.conf; do
     [ -f "$pool" ] || continue
     pname=$(basename "$pool" .conf)
-    case "$pname" in www|phpmyadmin|phppgadmin) continue ;; esac
+    case "$pname" in www|phpmyadmin|phppgadmin|adminer) continue ;; esac
     user=$(grep -E '^\s*user\s*=' "$pool" 2>/dev/null | head -1 | awk -F'=' '{print $2}' | xargs)
     if [ -n "$user" ] && [ "$user" != "www-data" ]; then
         SITE_USERS+=("$user")
@@ -93,7 +93,7 @@ esac
 echo "  Config dirs    : /etc/nginx  /etc/php"
 [ "$DATABASE" = "mariadb" ] && echo "                   /etc/mysql"
 [ "$DATABASE" = "pgsql" ]   && echo "                   /etc/postgresql"
-echo "  Data dirs      : /usr/share/phpmyadmin  /usr/share/phppgadmin  (whichever exists)"
+echo "  Data dirs      : /usr/share/phpmyadmin  /usr/share/phppgadmin  /usr/share/adminer  (whichever exists)"
 [ "$DATABASE" = "mariadb" ] && echo "                   /var/lib/mysql"
 [ "$DATABASE" = "pgsql" ]   && echo "                   /var/lib/postgresql"
 echo "  Site files     : /www  (everything inside)"
@@ -155,6 +155,8 @@ echo "Removing config and data directories..."
 rm -rf /etc/nginx /etc/php
 [ "$DATABASE" = "mariadb" ] && rm -rf /etc/mysql /var/lib/mysql /var/lib/phpmyadmin /usr/share/phpmyadmin
 [ "$DATABASE" = "pgsql"   ] && rm -rf /etc/postgresql /var/lib/postgresql /usr/share/phppgadmin /var/lib/phppgadmin
+# Adminer (used for either DB) and any leftover phpPgAdmin from older installs
+rm -rf /usr/share/adminer /usr/share/phppgadmin /var/lib/phppgadmin
 rm -rf /run/php /var/log/nginx
 rm -f  /etc/apt/sources.list.d/php.list /etc/apt/trusted.gpg.d/php.gpg
 rm -f  /etc/apt/sources.list.d/ondrej-*.list /etc/apt/sources.list.d/ondrej-*.sources
@@ -205,8 +207,9 @@ else
 fi
 echo ""
 echo "  ✓ /etc/nginx /etc/php removed"
-[ "$DATABASE" = "mariadb" ] && echo "  ✓ /etc/mysql /var/lib/mysql /usr/share/phpmyadmin removed"
-[ "$DATABASE" = "pgsql"   ] && echo "  ✓ /etc/postgresql /var/lib/postgresql /usr/share/phppgadmin removed"
+[ "$DATABASE" = "mariadb" ] && echo "  ✓ /etc/mysql /var/lib/mysql removed"
+[ "$DATABASE" = "pgsql"   ] && echo "  ✓ /etc/postgresql /var/lib/postgresql removed"
+echo "  ✓ /usr/share/{phpmyadmin,phppgadmin,adminer} removed (whichever existed)"
 echo "  ✓ /www removed"
 echo "  ✓ www-data system user preserved"
 [ "${DELETE_CERTS:-no}" = "yes" ] && echo "  ✓ /etc/letsencrypt removed"

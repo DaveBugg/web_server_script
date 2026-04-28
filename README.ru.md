@@ -6,7 +6,10 @@
 
 **Выбор при установке:**
 - Web-сервер: **Apache** (mpm_event + PHP-FPM через mod_proxy_fcgi) **или Nginx** (PHP-FPM через fastcgi_pass)
-- БД: **MariaDB** (с phpMyAdmin) **или PostgreSQL** (с phpPgAdmin)
+- БД: **MariaDB** **или PostgreSQL**
+- Web-UI для БД:
+  - MariaDB → выбор **phpMyAdmin** *или* **Adminer**
+  - PostgreSQL → **Adminer** (принудительно — phpPgAdmin поддерживает только PG ≤ 13 и заброшен)
 
 В каждом стеке: PHP-FPM 8.4 (8.5 на Ubuntu 26.04 нативно), HTTP/2, реальные IP от Cloudflare, Composer, fail2ban.
 
@@ -45,8 +48,8 @@ bash <(wget -qO- https://raw.githubusercontent.com/DaveBugg/web_server_script/ma
 Select an action [0-4]:
 ```
 
-При выборе **1) Install** на чистом сервере меню задаст два вопроса
-(web-сервер, БД) и запустит соответствующий установщик. Выбор сохранится в
+При выборе **1) Install** на чистом сервере меню спросит web-сервер, БД и
+(для MariaDB) UI для админки, и запустит соответствующий установщик. Выбор сохранится в
 `/etc/web_server_script.conf`. Все последующие действия (Add/Remove site,
 Uninstall) автоматически идут к нужному скрипту — стек больше не спрашивают.
 
@@ -92,18 +95,27 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/m
 вопросы задаются только для незаданных значений. Примеры:
 
 ```bash
-# Поставить Apache + MariaDB без вопросов
+# Apache + MariaDB + phpMyAdmin (по умолчанию)
 curl -fsSL .../apache/install.sh | \
   DATABASE=mariadb \
+  DB_UI=phpmyadmin \
   MYSQL_ROOT='SecureRoot123!' \
   PHPMYADMIN_DIR='myadmin42' \
   bash
 
-# Поставить Nginx + PostgreSQL
+# Apache + MariaDB + Adminer
+curl -fsSL .../apache/install.sh | \
+  DATABASE=mariadb \
+  DB_UI=adminer \
+  MYSQL_ROOT='SecureRoot123!' \
+  ADMINER_DIR='admdb' \
+  bash
+
+# Nginx + PostgreSQL (Adminer принудительно)
 curl -fsSL .../nginx/install.sh | \
   DATABASE=pgsql \
   PG_PASS='SecurePg123!' \
-  PHPPGADMIN_DIR='mypga' \
+  ADMINER_DIR='admdb' \
   bash
 
 # Добавить сайт с автогенерацией пароля БД
@@ -148,9 +160,11 @@ curl -fsSL .../apache/install.sh | \
 - Реальные IP Cloudflare автоматически подтягиваются и настраиваются (`mod_remoteip` для Apache, `set_real_ip_from` для Nginx)
 - HTTP/2
 
-**Стек MariaDB добавляет:** mariadb-server + phpMyAdmin (последний с phpmyadmin.net) на отдельном PHP-FPM пуле, доступ по `/<твой-алиас>`
+**Стек MariaDB добавляет:** `mariadb-server` плюс на выбор:
+- **phpMyAdmin** (последний с phpmyadmin.net, ~12 МБ) на отдельном PHP-FPM pool, доступ по `/<алиас>`
+- или **Adminer** (один PHP-файл ~500 КБ, последний с adminer.org, поддерживает MySQL/PG/SQLite/MSSQL/Oracle) на своём pool
 
-**Стек PostgreSQL добавляет:** postgresql + postgresql-contrib + phpPgAdmin 7.13 (с upstream tarball) на отдельном PHP-FPM пуле, доступ по `/<твой-алиас>`. `pg_hba.conf` настраивается на scram-sha-256 пароль-аутентификацию для localhost, чтобы phpPgAdmin мог логиниться.
+**Стек PostgreSQL добавляет:** `postgresql` + `postgresql-contrib` плюс **Adminer** (принудительно — phpPgAdmin поддерживает только PG ≤ 13 и заброшен). `pg_hba.conf` настраивается на scram-sha-256 пароль-аутентификацию для localhost, чтобы Adminer мог логиниться по TCP.
 
 **`add-site.sh`** для каждого домена создаёт:
 

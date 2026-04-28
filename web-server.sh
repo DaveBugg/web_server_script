@@ -63,6 +63,11 @@ detect_state() {
         elif dpkg -l 2>/dev/null | grep -q "^ii\s\+postgresql\b";   then DATABASE=pgsql
         fi
     fi
+    if [ -z "${DB_UI:-}" ]; then
+        if   [ -d /usr/share/phpmyadmin ]; then DB_UI=phpmyadmin
+        elif [ -d /usr/share/adminer ];    then DB_UI=adminer
+        fi
+    fi
 
     PHP_VER_DETECTED="${PHP_VER:-}"
     if [ -z "$PHP_VER_DETECTED" ] && [ -d /etc/php ]; then
@@ -77,7 +82,7 @@ detect_state() {
         for f in /etc/apache2/sites-available/*.conf; do
             [ -f "$f" ] || continue
             n=$(basename "$f" .conf)
-            case "$n" in 000-default|default-ssl|phpmyadmin|phppgadmin) continue ;; esac
+            case "$n" in 000-default|default-ssl|phpmyadmin|phppgadmin|adminer) continue ;; esac
             SITE_COUNT=$((SITE_COUNT+1))
         done
     elif [ "$WEB_SERVER" = "nginx" ] && [ -d /etc/nginx/sites-available ]; then
@@ -171,6 +176,7 @@ ${C_BOLD}=================================================================${C_RE
   System    : ${OS_PRETTY:-unknown}
   Web server: ${WEB_SERVER:-<none>}  ($WEB_STATE)
   Database  : ${DATABASE:-<none>}
+  Admin UI  : ${DB_UI:-<none>}${DB_UI_DIR:+  → /${DB_UI_DIR}}
   PHP-FPM   : ${PHP_VER_DETECTED:-<none>}
   Sites     : $SITE_COUNT
 

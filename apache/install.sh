@@ -33,8 +33,7 @@ set -o pipefail
 LOG_FILE="install.log"
 PHP_VER="${PHP_VER:-8.4}"
 PHPMYADMIN_URL="https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.zip"
-PHPPGADMIN_VER="7.13.0"
-PHPPGADMIN_URL="https://github.com/phppgadmin/phppgadmin/releases/download/REL_7-13-0/phpPgAdmin-${PHPPGADMIN_VER}.tar.gz"
+ADMINER_URL="https://www.adminer.org/latest.php"
 STATE_FILE="/etc/web_server_script.conf"
 
 # Open fd 3 from /dev/tty so prompts work even when piped (curl | bash).
@@ -108,24 +107,45 @@ case "$DATABASE" in
     *) echo "ERROR: unknown DATABASE='$DATABASE' (use 'mariadb' or 'pgsql')"; exit 1 ;;
 esac
 
+# Choice of web admin UI:
+#   - mariadb: phpMyAdmin (default) OR Adminer
+#   - pgsql:   Adminer (forced — phpPgAdmin is dead, supports PG <=13 only)
+if [ "$DATABASE" = "mariadb" ]; then
+    ask DB_UI "DB admin UI [phpmyadmin|adminer]: "
+    DB_UI=$(echo "${DB_UI:-phpmyadmin}" | tr '[:upper:]' '[:lower:]')
+    case "$DB_UI" in
+        phpmyadmin|pma)         DB_UI=phpmyadmin ;;
+        adminer)                DB_UI=adminer ;;
+        *) echo "ERROR: unknown DB_UI='$DB_UI' (use 'phpmyadmin' or 'adminer')"; exit 1 ;;
+    esac
+else
+    DB_UI=adminer
+    echo "Database is PostgreSQL — admin UI forced to Adminer (single PHP file, supports all PG versions)."
+fi
+
 echo "============================================================"
-echo " Web server install — version 4.0 (Apache stack)"
+echo " Web server install — version 4.1 (Apache stack)"
 echo " Detected: $PRETTY_NAME ($DISTRO_CODENAME)"
 echo " Target  : Apache + PHP-FPM ${PHP_VER} + ${DATABASE} +"
-[ "$DATABASE" = "mariadb" ] && echo "           phpMyAdmin + HTTP/2 + mod_remoteip"
-[ "$DATABASE" = "pgsql"   ] && echo "           phpPgAdmin + HTTP/2 + mod_remoteip"
+echo "           ${DB_UI} + HTTP/2 + mod_remoteip"
 echo "============================================================"
 
 if [ "$DATABASE" = "mariadb" ]; then
-    ask MYSQL_ROOT     "Enter password for MariaDB root user: "
-    ask PHPMYADMIN_DIR "Enter phpMyAdmin path alias: "
-    [ -z "${MYSQL_ROOT:-}"     ] && { echo "Password can't be blank"; exit 1; }
-    [ -z "${PHPMYADMIN_DIR:-}" ] && { echo "phpMyAdmin alias can't be blank"; exit 1; }
+    ask MYSQL_ROOT "Enter password for MariaDB root user: "
+    [ -z "${MYSQL_ROOT:-}" ] && { echo "Password can't be blank"; exit 1; }
 else
-    ask PG_PASS        "Enter password for PostgreSQL 'postgres' user: "
-    ask PHPPGADMIN_DIR "Enter phpPgAdmin path alias: "
-    [ -z "${PG_PASS:-}"        ] && { echo "Password can't be blank"; exit 1; }
-    [ -z "${PHPPGADMIN_DIR:-}" ] && { echo "phpPgAdmin alias can't be blank"; exit 1; }
+    ask PG_PASS "Enter password for PostgreSQL 'postgres' user: "
+    [ -z "${PG_PASS:-}" ] && { echo "Password can't be blank"; exit 1; }
+fi
+
+if [ "$DB_UI" = "phpmyadmin" ]; then
+    ask PHPMYADMIN_DIR "Enter phpMyAdmin path alias: "
+    [ -z "${PHPMYADMIN_DIR:-}" ] && { echo "phpMyAdmin alias can't be blank"; exit 1; }
+    DB_UI_DIR="$PHPMYADMIN_DIR"
+else
+    ask ADMINER_DIR "Enter Adminer path alias: "
+    [ -z "${ADMINER_DIR:-}" ] && { echo "Adminer alias can't be blank"; exit 1; }
+    DB_UI_DIR="$ADMINER_DIR"
 fi
 
 BLOWFISH_SECRET=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
@@ -266,7 +286,7 @@ EOF
         echo "ERROR: Failed to set postgres password. Aborting." | tee -a $LOG_FILE
         exit 1
     fi
-    # Allow scram-sha-256 password auth over local TCP so phpPgAdmin can log in.
+    # Allow scram-sha-256 password auth over local TCP so Adminer (PHP) can log in.
     PG_HBA=$(sudo -u postgres psql -tAc "SHOW hba_file" 2>/dev/null)
     if [ -n "$PG_HBA" ] && [ -f "$PG_HBA" ]; then
         if grep -qE '^host\s+all\s+all\s+127\.0\.0\.1/32' "$PG_HBA"; then
@@ -285,9 +305,9 @@ EOF
 fi
 
 # =============================================================================
-# Install web admin UI
+# Install web admin UI — phpMyAdmin (MariaDB only) OR Adminer (any DB)
 # =============================================================================
-if [ "$DATABASE" = "mariadb" ]; then
+if [ "$DB_UI" = "phpmyadmin" ]; then
     # ---------- phpMyAdmin ----------
     echo "Installing phpMyAdmin (latest) with PHP-FPM support..." | tee -a $LOG_FILE
     cd /tmp
@@ -384,41 +404,30 @@ EOF
     chown www-data:www-data /usr/share/phpmyadmin/config.inc.php
     a2enconf phpmyadmin >> $LOG_FILE 2>&1
 else
-    # ---------- phpPgAdmin ----------
-    echo "Installing phpPgAdmin ${PHPPGADMIN_VER} with PHP-FPM support..." | tee -a $LOG_FILE
-    cd /tmp
-    wget -qL "$PHPPGADMIN_URL" -O phpPgAdmin.tar.gz
-    if [ ! -s phpPgAdmin.tar.gz ]; then
-        echo "ERROR: phpPgAdmin download failed (URL: $PHPPGADMIN_URL)" | tee -a $LOG_FILE
+    # ---------- Adminer ----------
+    # Single PHP file — supports MySQL/MariaDB, PostgreSQL, SQLite, MSSQL, Oracle.
+    # Active dev (5.x line, 2024+), drop-in replacement for phpMyAdmin and the
+    # only sensible web UI for PostgreSQL after phpPgAdmin went stale (max PG13).
+    echo "Installing Adminer (latest single-file release)..." | tee -a $LOG_FILE
+    rm -rf /usr/share/adminer
+    mkdir -p /usr/share/adminer
+    if ! wget -qL "$ADMINER_URL" -O /usr/share/adminer/adminer.php; then
+        echo "ERROR: Adminer download failed (URL: $ADMINER_URL)" | tee -a $LOG_FILE
         exit 1
     fi
-    tar -xzf phpPgAdmin.tar.gz
-    PGA_DIR=$(ls -d phpPgAdmin-* 2>/dev/null | head -1)
-    if [ -z "$PGA_DIR" ] || [ ! -d "$PGA_DIR" ]; then
-        echo "ERROR: phpPgAdmin extraction failed" | tee -a $LOG_FILE
+    if [ ! -s /usr/share/adminer/adminer.php ]; then
+        echo "ERROR: Adminer file is empty after download" | tee -a $LOG_FILE
         exit 1
     fi
-    rm -rf /usr/share/phppgadmin
-    mv "$PGA_DIR" /usr/share/phppgadmin
-    rm phpPgAdmin.tar.gz
-    cd - >/dev/null
-    chown -R www-data:www-data /usr/share/phppgadmin
+    # index.php symlink so /<alias>/ resolves the UI
+    ln -sf adminer.php /usr/share/adminer/index.php
+    chown -R www-data:www-data /usr/share/adminer
 
-    if [ -f /usr/share/phppgadmin/conf/config.inc.php ]; then
-        sed -i "s|\$conf\['servers'\]\[0\]\['host'\] = '';|\$conf['servers'][0]['host'] = 'localhost';|" \
-            /usr/share/phppgadmin/conf/config.inc.php
-        sed -i "s|\$conf\['extra_login_security'\] = true;|\$conf['extra_login_security'] = false;|" \
-            /usr/share/phppgadmin/conf/config.inc.php
-    fi
-
-    mkdir -p /var/lib/phppgadmin/tmp
-    chown www-data:www-data /var/lib/phppgadmin/tmp
-
-    cat > /etc/php/${PHP_VER}/fpm/pool.d/phppgadmin.conf <<EOF
-[phppgadmin]
+    cat > /etc/php/${PHP_VER}/fpm/pool.d/adminer.conf <<EOF
+[adminer]
 user = www-data
 group = www-data
-listen = /run/php/php${PHP_VER}-fpm-phppgadmin.sock
+listen = /run/php/php${PHP_VER}-fpm-adminer.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
@@ -427,29 +436,29 @@ pm.max_children = 5
 pm.start_servers = 1
 pm.min_spare_servers = 1
 pm.max_spare_servers = 3
-php_admin_value[open_basedir] = /usr/share/phppgadmin/:/var/lib/phppgadmin/:/usr/share/php/:/tmp
-php_admin_value[upload_tmp_dir] = /var/lib/phppgadmin/tmp
-php_admin_value[session.save_path] = /var/lib/phppgadmin/tmp
+php_admin_value[open_basedir] = /usr/share/adminer/:/usr/share/php/:/tmp
 php_admin_value[memory_limit] = 128M
 php_admin_value[max_execution_time] = 300
+php_admin_value[post_max_size] = 32M
+php_admin_value[upload_max_filesize] = 32M
 EOF
 
-    cat > /etc/apache2/conf-available/phppgadmin.conf <<EOF
-# phpPgAdmin Apache configuration for PHP-FPM
-Alias /$PHPPGADMIN_DIR /usr/share/phppgadmin
+    cat > /etc/apache2/conf-available/adminer.conf <<EOF
+# Adminer Apache configuration for PHP-FPM
+Alias /$ADMINER_DIR /usr/share/adminer
 
-<Directory /usr/share/phppgadmin>
+<Directory /usr/share/adminer>
     Options SymLinksIfOwnerMatch
     DirectoryIndex index.php
-    AllowOverride All
+    AllowOverride None
     Require all granted
 
     <FilesMatch "\.php\$">
-        SetHandler "proxy:unix:/run/php/php${PHP_VER}-fpm-phppgadmin.sock|fcgi://localhost"
+        SetHandler "proxy:unix:/run/php/php${PHP_VER}-fpm-adminer.sock|fcgi://localhost"
     </FilesMatch>
 </Directory>
 EOF
-    a2enconf phppgadmin >> $LOG_FILE 2>&1
+    a2enconf adminer >> $LOG_FILE 2>&1
 fi
 
 # =============================================================================
@@ -634,9 +643,11 @@ cd - >/dev/null
     echo "# Generated by web_server_script — do not edit by hand"
     echo "WEB_SERVER=apache"
     echo "DATABASE=$DATABASE"
+    echo "DB_UI=$DB_UI"
+    echo "DB_UI_DIR=$DB_UI_DIR"
     echo "PHP_VER=$PHP_VER"
-    [ "$DATABASE" = "mariadb" ] && echo "PHPMYADMIN_DIR=$PHPMYADMIN_DIR"
-    [ "$DATABASE" = "pgsql"   ] && echo "PHPPGADMIN_DIR=$PHPPGADMIN_DIR"
+    [ "$DB_UI" = "phpmyadmin" ] && echo "PHPMYADMIN_DIR=$PHPMYADMIN_DIR"
+    [ "$DB_UI" = "adminer" ]    && echo "ADMINER_DIR=$ADMINER_DIR"
     echo "INSTALLED_AT=$(date -u +%FT%TZ)"
 } > "$STATE_FILE"
 chmod 644 "$STATE_FILE"
@@ -651,12 +662,9 @@ echo "OS              : $PRETTY_NAME"
 echo "Web server      : Apache (MPM Event, HTTP/2)"
 echo "PHP-FPM         : ${PHP_VER}"
 echo "Database        : ${DATABASE}"
+echo "DB Admin UI     : ${DB_UI}"
 echo "Cloudflare IPs  : mod_remoteip configured"
-if [ "$DATABASE" = "mariadb" ]; then
-    echo "phpMyAdmin URL  : http://<server>/${PHPMYADMIN_DIR}"
-else
-    echo "phpPgAdmin URL  : http://<server>/${PHPPGADMIN_DIR}"
-fi
+echo "Admin URL       : http://<server>/${DB_UI_DIR}"
 echo "State file      : $STATE_FILE"
 echo ""
 echo "Next: add a site with apache/add-site.sh"

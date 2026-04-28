@@ -6,7 +6,10 @@ Universal LAMP / LEMP web-server installer and site manager for Debian / Ubuntu.
 
 **Pick at install time:**
 - Web server: **Apache** (mpm_event + PHP-FPM via mod_proxy_fcgi) **or Nginx** (PHP-FPM via fastcgi_pass)
-- Database: **MariaDB** (with phpMyAdmin) **or PostgreSQL** (with phpPgAdmin)
+- Database: **MariaDB** **or PostgreSQL**
+- DB admin UI:
+  - MariaDB → choose **phpMyAdmin** *or* **Adminer**
+  - PostgreSQL → **Adminer** (forced — phpPgAdmin is dead, supports PG ≤ 13 only)
 
 PHP-FPM 8.4 (8.5 on Ubuntu 26.04 native), HTTP/2, Cloudflare real-IP, Composer, fail2ban included on every stack.
 
@@ -45,8 +48,9 @@ Menu:
 Select an action [0-4]:
 ```
 
-When you pick **1) Install** on a fresh server, the menu asks two questions
-(web server, database) and then runs the matching installer. The choice is
+When you pick **1) Install** on a fresh server, the menu asks for the web
+server, the database engine and (for MariaDB) the DB admin UI, then runs the
+matching installer. The choice is
 persisted in `/etc/web_server_script.conf`. Subsequent actions (Add/Remove
 site, Uninstall) automatically route to the correct sub-script — you don't
 get asked the stack question again.
@@ -92,18 +96,27 @@ Every script honours env-var overrides — interactive prompts only fire for
 unset variables. Examples:
 
 ```bash
-# Install Apache + MariaDB without prompts
+# Install Apache + MariaDB + phpMyAdmin (default)
 curl -fsSL .../apache/install.sh | \
   DATABASE=mariadb \
+  DB_UI=phpmyadmin \
   MYSQL_ROOT='SecureRoot123!' \
   PHPMYADMIN_DIR='myadmin42' \
   bash
 
-# Install Nginx + PostgreSQL
+# Install Apache + MariaDB + Adminer
+curl -fsSL .../apache/install.sh | \
+  DATABASE=mariadb \
+  DB_UI=adminer \
+  MYSQL_ROOT='SecureRoot123!' \
+  ADMINER_DIR='admdb' \
+  bash
+
+# Install Nginx + PostgreSQL (always Adminer)
 curl -fsSL .../nginx/install.sh | \
   DATABASE=pgsql \
   PG_PASS='SecurePg123!' \
-  PHPPGADMIN_DIR='mypga' \
+  ADMINER_DIR='admdb' \
   bash
 
 # Add site with auto-generated DB
@@ -148,9 +161,11 @@ curl -fsSL .../apache/install.sh | \
 - Cloudflare IP ranges auto-fetched and configured (`mod_remoteip` for Apache, `set_real_ip_from` for Nginx)
 - HTTP/2
 
-**MariaDB stack adds:** mariadb-server + phpMyAdmin (latest from phpmyadmin.net) on a dedicated PHP-FPM pool, served at `/<your-alias>`
+**MariaDB stack adds:** `mariadb-server` plus your choice of:
+- **phpMyAdmin** (latest from phpmyadmin.net, ~12 MB) on a dedicated PHP-FPM pool, served at `/<your-alias>`
+- or **Adminer** (single 500 KB PHP file, latest from adminer.org, MySQL/PG/SQLite/MSSQL/Oracle support) on its own pool
 
-**PostgreSQL stack adds:** postgresql + postgresql-contrib + phpPgAdmin 7.13 (from upstream tarball) on a dedicated PHP-FPM pool, served at `/<your-alias>`. `pg_hba.conf` is configured for scram-sha-256 password auth on localhost so phpPgAdmin can log in.
+**PostgreSQL stack adds:** `postgresql` + `postgresql-contrib` plus **Adminer** (forced — phpPgAdmin's last release supports PG 13 only and is unmaintained). `pg_hba.conf` is configured for scram-sha-256 password auth on localhost so Adminer can log in over TCP.
 
 **`add-site.sh`** for each domain creates:
 
