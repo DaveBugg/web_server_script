@@ -242,7 +242,10 @@ echo ""
 echo "=============================================="
 echo " Site $DOMAIN removed."
 echo "=============================================="
-[ "$DELETE_USER"  = "no" ] && [ -n "$SITE_USER" ] && echo "  Note: system user '$SITE_USER' kept."
-[ "$DELETE_FILES" = "no" ] && [ -d "/www/$DOMAIN" ] && echo "  Note: site files in /www/$DOMAIN kept."
-[ "$DELETE_CERT"  = "no" ] && echo "  Note: SSL cert (if any) kept — remove with: certbot delete --cert-name $DOMAIN"
-[ -n "$DB_NAME" ] && [ "$DELETE_DB" = "no" ] && echo "  Note: database '$DB_NAME' and DB user '$DB_USER' kept."
+{
+    [ "$DELETE_USER"  = "no" ] && [ -n "$SITE_USER" ]    && echo "  Note: system user '$SITE_USER' kept."
+    [ "$DELETE_FILES" = "no" ] && [ -d "/www/$DOMAIN" ]  && echo "  Note: site files in /www/$DOMAIN kept."
+    [ "$DELETE_CERT"  = "no" ]                           && echo "  Note: SSL cert (if any) kept — remove with: certbot delete --cert-name $DOMAIN"
+    [ -n "$DB_NAME" ] && [ "$DELETE_DB" = "no" ]         && echo "  Note: database '$DB_NAME' and DB user '$DB_USER' kept."
+} || true
+exit 0
