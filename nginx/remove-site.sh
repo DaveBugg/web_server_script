@@ -1,26 +1,23 @@
 #!/bin/bash
 # =============================================================================
-# Remove Site — disable & remove a single virtual host + PHP-FPM pool
+# Nginx: Remove Site — disable & remove server block + PHP-FPM pool + opt DB
 #
-# Quick remove (interactive — picks site from a list):
-#   bash <(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/remove-site.sh)
+# Quick remove (interactive):
+#   bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/nginx/remove-site.sh)
 #
 # Non-interactive:
-#   curl -fsSL https://.../remove-site.sh | \
-#     DOMAIN=example.com DELETE_USER=yes DELETE_FILES=yes DELETE_CERT=yes bash
+#   curl -fsSL .../remove-site.sh | \
+#     DOMAIN=example.com DELETE_USER=yes DELETE_FILES=yes \
+#     DELETE_CERT=yes DELETE_DB=yes FORCE=yes bash
 #
-# Env vars:
-#   DOMAIN          — domain to remove (required if non-interactive)
-#   DELETE_USER     — yes/no  delete the system user (default: prompt)
-#   DELETE_FILES    — yes/no  delete /www/$DOMAIN  (default: prompt)
-#   DELETE_CERT     — yes/no  certbot delete --cert-name $DOMAIN  (default: prompt)
-#   FORCE           — yes     skip the confirmation prompt
-#   PHP_VER         — PHP version (auto-detected if not set)
+# Reads:  /etc/web_server_script.conf
 #
-# Version: 1.0
+# Version: 4.0
 # =============================================================================
 
-# Open fd 3 from /dev/tty so prompts work even when piped (curl | bash).
+STATE_FILE="/etc/web_server_script.conf"
+[ -f "$STATE_FILE" ] && . "$STATE_FILE"
+
 if [ -e /dev/tty ]; then
     exec 3</dev/tty
 else
@@ -42,48 +39,34 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# =============================================================================
-# Auto-detect PHP version if not set
-# =============================================================================
 if [ -z "${PHP_VER:-}" ]; then
     PHP_VER=$(ls -d /etc/php/*/fpm/pool.d 2>/dev/null | sed -n 's|/etc/php/\([0-9.]*\)/fpm/pool.d|\1|p' | sort -V | tail -1)
 fi
 if [ -z "$PHP_VER" ]; then
-    echo "ERROR: could not detect PHP-FPM version. Is install.sh ever run?"
+    echo "ERROR: could not detect PHP-FPM version. Was install.sh ever run?"
     exit 1
 fi
-echo "Detected PHP version: $PHP_VER"
 
 # =============================================================================
-# List existing sites (skip default + phpmyadmin)
+# List sites (skip default + admin UIs)
 # =============================================================================
-list_sites() {
-    local found=()
-    if [ -d /etc/apache2/sites-available ]; then
-        for f in /etc/apache2/sites-available/*.conf; do
-            [ -f "$f" ] || continue
-            local name=$(basename "$f" .conf)
-            case "$name" in
-                000-default|default-ssl|phpmyadmin) continue ;;
-            esac
-            found+=("$name")
-        done
-    fi
-    printf '%s\n' "${found[@]}"
-}
-
 SITES=()
-while IFS= read -r line; do
-    [ -n "$line" ] && SITES+=("$line")
-done < <(list_sites)
+if [ -d /etc/nginx/sites-available ]; then
+    for f in /etc/nginx/sites-available/*; do
+        [ -f "$f" ] || continue
+        n=$(basename "$f")
+        case "$n" in 000-default|default) continue ;; esac
+        SITES+=("$n")
+    done
+fi
 
 if [ ${#SITES[@]} -eq 0 ]; then
-    echo "No managed sites found in /etc/apache2/sites-available/"
+    echo "No managed sites found in /etc/nginx/sites-available/"
     exit 0
 fi
 
 # =============================================================================
-# Pick a domain
+# Pick site
 # =============================================================================
 if [ -z "${DOMAIN:-}" ]; then
     echo ""
@@ -95,7 +78,6 @@ if [ -z "${DOMAIN:-}" ]; then
     done
     echo ""
     ask SITE_CHOICE "Select site to remove (1-${#SITES[@]}, or type domain): "
-
     if [[ "$SITE_CHOICE" =~ ^[0-9]+$ ]] && [ "$SITE_CHOICE" -ge 1 ] && [ "$SITE_CHOICE" -le ${#SITES[@]} ]; then
         DOMAIN="${SITES[$((SITE_CHOICE-1))]}"
     else
@@ -103,42 +85,44 @@ if [ -z "${DOMAIN:-}" ]; then
     fi
 fi
 
-if [ -z "$DOMAIN" ]; then
-    echo "Domain not specified, aborting."
-    exit 1
-fi
+[ -z "$DOMAIN" ] && { echo "Domain not specified, aborting."; exit 1; }
 
-# Verify the site exists
-if [ ! -f "/etc/apache2/sites-available/$DOMAIN.conf" ]; then
-    echo "ERROR: /etc/apache2/sites-available/$DOMAIN.conf not found."
-    echo "Available sites:"
-    printf '  %s\n' "${SITES[@]}"
+if [ ! -f "/etc/nginx/sites-available/$DOMAIN" ]; then
+    echo "ERROR: /etc/nginx/sites-available/$DOMAIN not found."
+    echo "Available: ${SITES[*]}"
     exit 1
 fi
 
 # =============================================================================
-# Find associated user from PHP-FPM pool config
+# Find user + DB info
 # =============================================================================
 POOL_FILE="/etc/php/${PHP_VER}/fpm/pool.d/${DOMAIN}.conf"
 SITE_USER=""
-if [ -f "$POOL_FILE" ]; then
-    SITE_USER=$(grep -E '^\s*user\s*=' "$POOL_FILE" | head -1 | awk -F'=' '{print $2}' | xargs)
+[ -f "$POOL_FILE" ] && SITE_USER=$(grep -E '^\s*user\s*=' "$POOL_FILE" | head -1 | awk -F'=' '{print $2}' | xargs)
+
+DB_INFO_FILE="/www/${DOMAIN}/db.txt"
+DB_TYPE=""; DB_NAME=""; DB_USER=""
+if [ -f "$DB_INFO_FILE" ]; then
+    DB_TYPE=$(grep -E '^DB_TYPE='  "$DB_INFO_FILE" | head -1 | cut -d'=' -f2-)
+    DB_NAME=$(grep -E '^DB_NAME='  "$DB_INFO_FILE" | head -1 | cut -d'=' -f2-)
+    DB_USER=$(grep -E '^DB_USER='  "$DB_INFO_FILE" | head -1 | cut -d'=' -f2-)
 fi
 
 # =============================================================================
-# Confirmation summary
+# Summary + confirm
 # =============================================================================
 echo ""
 echo "=============================================="
 echo " About to remove site: $DOMAIN"
 echo "=============================================="
-echo "  Apache vhost  : /etc/apache2/sites-available/${DOMAIN}.conf"
+echo "  Nginx vhost   : /etc/nginx/sites-available/${DOMAIN}"
 echo "  PHP-FPM pool  : ${POOL_FILE}"
 echo "  Cron job      : /etc/cron.d/php-sessions-${DOMAIN}"
 echo "  Logrotate     : /etc/logrotate.d/${DOMAIN}.conf"
 echo "  Site user     : ${SITE_USER:-<unknown>}"
 echo "  Files         : /www/${DOMAIN}"
 echo "  SSL cert      : /etc/letsencrypt/live/${DOMAIN}/ (if exists)"
+[ -n "$DB_NAME" ] && echo "  Database      : ${DB_TYPE} → ${DB_NAME} (user: ${DB_USER})"
 echo ""
 
 if [ "${FORCE:-no}" != "yes" ]; then
@@ -149,46 +133,37 @@ if [ "${FORCE:-no}" != "yes" ]; then
     fi
 fi
 
-# =============================================================================
-# Optional deletions — ask for each unless overridden by env
-# =============================================================================
 ask DELETE_USER  "Also delete system user '${SITE_USER:-<none>}'? (yes/no) [no]: "
 ask DELETE_FILES "Also delete site files /www/${DOMAIN}? (yes/no) [no]: "
 ask DELETE_CERT  "Also delete SSL certificate for ${DOMAIN}? (yes/no) [no]: "
+[ -n "$DB_NAME" ] && ask DELETE_DB "Also DROP database '${DB_NAME}' and DB user '${DB_USER}'? (yes/no) [no]: "
 
 DELETE_USER="${DELETE_USER:-no}"
 DELETE_FILES="${DELETE_FILES:-no}"
 DELETE_CERT="${DELETE_CERT:-no}"
+DELETE_DB="${DELETE_DB:-no}"
 
 # =============================================================================
-# Perform removal
+# Remove
 # =============================================================================
 echo ""
 echo "Removing site $DOMAIN..."
 
-# 1. Disable Apache site
-if a2query -s "$DOMAIN" >/dev/null 2>&1; then
-    a2dissite "$DOMAIN" >/dev/null 2>&1
-    echo "  - apache vhost disabled"
-fi
-rm -f "/etc/apache2/sites-available/${DOMAIN}.conf"
-rm -f "/etc/apache2/sites-enabled/${DOMAIN}.conf"
+rm -f "/etc/nginx/sites-enabled/${DOMAIN}"
+rm -f "/etc/nginx/sites-available/${DOMAIN}"
+echo "  - nginx vhost removed"
 
-# 2. Remove PHP-FPM pool
 rm -f "$POOL_FILE"
 echo "  - php-fpm pool removed"
 
-# 3. Remove cron + logrotate
 rm -f "/etc/cron.d/php-sessions-${DOMAIN}"
 rm -f "/etc/logrotate.d/${DOMAIN}.conf"
 echo "  - cron + logrotate removed"
 
-# 4. Restart PHP-FPM now (BEFORE deleting the user) so the pool's worker
-# processes — which run as $SITE_USER — actually exit. Otherwise userdel
-# fails with: "user X is currently used by process Y".
+# Restart PHP-FPM BEFORE deleting user (so worker procs exit)
 systemctl restart "php${PHP_VER}-fpm" 2>/dev/null || true
 
-# 5. Optionally delete SSL cert
+# SSL cert
 if [ "$DELETE_CERT" = "yes" ] && command -v certbot >/dev/null 2>&1; then
     if certbot certificates 2>/dev/null | grep -q "Certificate Name: ${DOMAIN}\$"; then
         certbot delete --cert-name "$DOMAIN" -n 2>&1 | tail -3
@@ -198,16 +173,35 @@ if [ "$DELETE_CERT" = "yes" ] && command -v certbot >/dev/null 2>&1; then
     fi
 fi
 
-# 6. Optionally delete user
+# DB
+if [ "$DELETE_DB" = "yes" ] && [ -n "$DB_NAME" ] && [ -n "$DB_TYPE" ]; then
+    case "$DB_TYPE" in
+        mariadb|mysql)
+            if mysql --defaults-file=/etc/mysql/debian.cnf -e "SELECT 1" >/dev/null 2>&1; then
+                mysql --defaults-file=/etc/mysql/debian.cnf <<EOF
+DROP DATABASE IF EXISTS \`${DB_NAME}\`;
+DROP USER IF EXISTS '${DB_USER}'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+                echo "  - MariaDB database '${DB_NAME}' and user '${DB_USER}' dropped"
+            else
+                echo "  - WARN: cannot connect to MariaDB; DB drop skipped"
+            fi
+            ;;
+        pgsql|postgres|postgresql)
+            sudo -u postgres psql -c "DROP DATABASE IF EXISTS \"${DB_NAME}\";"  >/dev/null 2>&1 || true
+            sudo -u postgres psql -c "DROP ROLE IF EXISTS \"${DB_USER}\";"      >/dev/null 2>&1 || true
+            echo "  - PostgreSQL database '${DB_NAME}' and role '${DB_USER}' dropped"
+            ;;
+    esac
+fi
+
+# System user
 if [ "$DELETE_USER" = "yes" ] && [ -n "$SITE_USER" ] && [ "$SITE_USER" != "www-data" ]; then
     if id "$SITE_USER" >/dev/null 2>&1; then
-        # Remove www-data from this user's group first (otherwise groupdel fails)
         gpasswd -d www-data "$SITE_USER" >/dev/null 2>&1 || true
-        # Kill any processes still owned by this user
         pkill -9 -u "$SITE_USER" 2>/dev/null || true
         sleep 1
-        # userdel -r removes the home dir too. Stderr is shown so any failure
-        # ("user is currently used by process X") is visible.
         if userdel -r "$SITE_USER" 2>&1; then
             echo "  - user $SITE_USER deleted"
         elif userdel "$SITE_USER" 2>&1; then
@@ -221,19 +215,20 @@ if [ "$DELETE_USER" = "yes" ] && [ -n "$SITE_USER" ] && [ "$SITE_USER" != "www-d
     fi
 fi
 
-# 7. Optionally delete files
+# Files
 if [ "$DELETE_FILES" = "yes" ]; then
     rm -rf "/www/${DOMAIN}"
     echo "  - files /www/${DOMAIN} deleted"
 fi
 
-# 8. Reload Apache (php-fpm was already restarted in step 4)
-systemctl reload apache2 2>/dev/null || systemctl restart apache2
+# Reload nginx
+nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || systemctl restart nginx
 
 echo ""
 echo "=============================================="
 echo " Site $DOMAIN removed."
 echo "=============================================="
-[ "$DELETE_USER"  = "no" ] && [ -n "$SITE_USER" ] && echo "  Note: system user '$SITE_USER' was kept."
+[ "$DELETE_USER"  = "no" ] && [ -n "$SITE_USER" ] && echo "  Note: system user '$SITE_USER' kept."
 [ "$DELETE_FILES" = "no" ] && [ -d "/www/$DOMAIN" ] && echo "  Note: site files in /www/$DOMAIN kept."
 [ "$DELETE_CERT"  = "no" ] && echo "  Note: SSL cert (if any) kept — remove with: certbot delete --cert-name $DOMAIN"
+[ -n "$DB_NAME" ] && [ "$DELETE_DB" = "no" ] && echo "  Note: database '$DB_NAME' and DB user '$DB_USER' kept."

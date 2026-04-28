@@ -1,7 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# Universal Web Server Setup Script
-# Apache + PHP-FPM 8.4 + MariaDB + phpMyAdmin + HTTP/2 + mod_remoteip (Cloudflare)
+# Apache Web Server Setup Script (PHP-FPM + DB choice)
+#
+# Stack: Apache 2.4 (MPM Event) + PHP-FPM + (MariaDB|PostgreSQL) +
+#        (phpMyAdmin|phpPgAdmin) + HTTP/2 + mod_remoteip (Cloudflare)
 #
 # Supported distributions:
 #   - Debian 12 (bookworm)        — uses sury.org repo for PHP 8.4
@@ -13,15 +15,17 @@
 #                                   with PHP_VER=8.5 to use the native package set.
 #
 # Quick install (interactive):
-#   bash <(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/install.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/apache/install.sh)
 #
 # Non-interactive (env vars):
-#   curl -fsSL https://.../install.sh | \
-#     MYSQL_ROOT='SecurePass!' PHPMYADMIN_DIR='myadmin' bash
+#   curl -fsSL .../install.sh | \
+#     DATABASE=mariadb MYSQL_ROOT='Pass!' PHPMYADMIN_DIR='myadmin' bash
+#   curl -fsSL .../install.sh | \
+#     DATABASE=pgsql PG_PASS='Pass!' PHPPGADMIN_DIR='mypga' bash
 #
 # Override PHP version: PHP_VER=8.5 ...
 #
-# Version: 3.2
+# Version: 4.0
 # =============================================================================
 
 set -u
@@ -29,16 +33,17 @@ set -o pipefail
 LOG_FILE="install.log"
 PHP_VER="${PHP_VER:-8.4}"
 PHPMYADMIN_URL="https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.zip"
+PHPPGADMIN_VER="7.13.0"
+PHPPGADMIN_URL="https://github.com/phppgadmin/phppgadmin/releases/download/REL_7-13-0/phpPgAdmin-${PHPPGADMIN_VER}.tar.gz"
+STATE_FILE="/etc/web_server_script.conf"
 
 # Open fd 3 from /dev/tty so prompts work even when piped (curl | bash).
-# Falls back to fd 0 if /dev/tty is unavailable (e.g. CI without a tty).
 if [ -e /dev/tty ]; then
     exec 3</dev/tty
 else
     exec 3<&0
 fi
 
-# Helper: prompt user, supports env-var override (non-interactive mode)
 ask() {
     local var="$1" msg="$2"
     local current="${!var:-}"
@@ -49,7 +54,6 @@ ask() {
     read -u 3 -r -p "$msg" "$var"
 }
 
-# Helper: run apt-get install with retry and verification
 apt_install() {
     local name="$1"; shift
     echo "  apt: installing $name..." | tee -a $LOG_FILE
@@ -93,22 +97,38 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# =============================================================================
+# Database choice & input collection
+# =============================================================================
+ask DATABASE "Database engine [mariadb|pgsql]: "
+DATABASE=$(echo "${DATABASE:-mariadb}" | tr '[:upper:]' '[:lower:]')
+case "$DATABASE" in
+    mariadb|mysql) DATABASE=mariadb ;;
+    pgsql|postgres|postgresql) DATABASE=pgsql ;;
+    *) echo "ERROR: unknown DATABASE='$DATABASE' (use 'mariadb' or 'pgsql')"; exit 1 ;;
+esac
+
 echo "============================================================"
-echo " Web server install — version 3.2"
+echo " Web server install — version 4.0 (Apache stack)"
 echo " Detected: $PRETTY_NAME ($DISTRO_CODENAME)"
-echo " Target  : Apache + PHP-FPM ${PHP_VER} + MariaDB + phpMyAdmin"
+echo " Target  : Apache + PHP-FPM ${PHP_VER} + ${DATABASE} +"
+[ "$DATABASE" = "mariadb" ] && echo "           phpMyAdmin + HTTP/2 + mod_remoteip"
+[ "$DATABASE" = "pgsql"   ] && echo "           phpPgAdmin + HTTP/2 + mod_remoteip"
 echo "============================================================"
 
-# =============================================================================
-# Input collection (interactive or via env: MYSQL_ROOT, PHPMYADMIN_DIR)
-# =============================================================================
-ask MYSQL_ROOT      "Enter password for MySQL root user: "
-ask PHPMYADMIN_DIR  "Enter PhpMyAdmin path alias: "
+if [ "$DATABASE" = "mariadb" ]; then
+    ask MYSQL_ROOT     "Enter password for MariaDB root user: "
+    ask PHPMYADMIN_DIR "Enter phpMyAdmin path alias: "
+    [ -z "${MYSQL_ROOT:-}"     ] && { echo "Password can't be blank"; exit 1; }
+    [ -z "${PHPMYADMIN_DIR:-}" ] && { echo "phpMyAdmin alias can't be blank"; exit 1; }
+else
+    ask PG_PASS        "Enter password for PostgreSQL 'postgres' user: "
+    ask PHPPGADMIN_DIR "Enter phpPgAdmin path alias: "
+    [ -z "${PG_PASS:-}"        ] && { echo "Password can't be blank"; exit 1; }
+    [ -z "${PHPPGADMIN_DIR:-}" ] && { echo "phpPgAdmin alias can't be blank"; exit 1; }
+fi
 
-if [ -z "${MYSQL_ROOT:-}" ];     then echo "Password can't be blank, aborting"; exit 1; fi
-if [ -z "${PHPMYADMIN_DIR:-}" ]; then echo "PhpMyAdmin alias can't be blank, aborting"; exit 1; fi
-
-BLOWFISH_SECRET=$(openssl rand -base64 32)
+BLOWFISH_SECRET=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
 
 # =============================================================================
 # System update and prerequisites
@@ -117,14 +137,9 @@ echo "Updating system and installing prerequisites..." | tee -a $LOG_FILE
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -y >> $LOG_FILE 2>&1
-# Note: full system upgrade intentionally skipped — would pull hundreds of MB
-# of unrelated packages (kernel, firmware) and stretch install time massively.
-# Only the packages this script installs receive the latest version from the
-# enabled repos via apt-get install below. Run `apt-get upgrade` manually
-# afterwards if you want a full security refresh.
 
 apt_install "prerequisites" lsb-release apt-transport-https ca-certificates \
-    wget curl gnupg || exit 1
+    wget curl gnupg openssl || exit 1
 
 if [ "$DISTRO_ID" = "ubuntu" ]; then
     apt_install "software-properties-common" software-properties-common || exit 1
@@ -136,7 +151,7 @@ fi
 NEED_THIRD_PARTY_REPO=true
 case "$DISTRO_ID:$DISTRO_VER" in
     debian:13)
-        echo "Debian 13 — PHP ${PHP_VER} available in native repo, skipping third-party" | tee -a $LOG_FILE
+        echo "Debian 13 — PHP ${PHP_VER} available in native repo" | tee -a $LOG_FILE
         NEED_THIRD_PARTY_REPO=false
         ;;
     debian:12)
@@ -147,9 +162,6 @@ case "$DISTRO_ID:$DISTRO_VER" in
         ;;
     ubuntu:*)
         echo "Adding ondrej/php PPA for Ubuntu ${DISTRO_VER} (${DISTRO_CODENAME})..." | tee -a $LOG_FILE
-        # Best-effort: on brand-new releases (e.g. 26.04 'resolute' on launch
-        # day) the PPA may not yet list this codename. We continue regardless;
-        # the apt-cache check below will catch a missing PHP package.
         add-apt-repository -y ppa:ondrej/php >> $LOG_FILE 2>&1 || \
             echo "  WARN: add-apt-repository failed — falling back to native repos" | tee -a $LOG_FILE
         ;;
@@ -159,14 +171,9 @@ if [ "$NEED_THIRD_PARTY_REPO" = true ]; then
     apt-get update -y >> $LOG_FILE 2>&1
 fi
 
-# Verify the requested PHP version is now available
 if ! apt-cache show php${PHP_VER}-fpm >/dev/null 2>&1; then
     echo "ERROR: php${PHP_VER}-fpm not available after repo setup." | tee -a $LOG_FILE
-    echo "Possible causes:" | tee -a $LOG_FILE
-    echo "  - ondrej/php PPA does not yet support codename '${DISTRO_CODENAME}'" | tee -a $LOG_FILE
-    echo "  - The requested PHP_VER (${PHP_VER}) is not packaged for this OS" | tee -a $LOG_FILE
     echo "Try: PHP_VER=<other-version> bash $0" | tee -a $LOG_FILE
-    echo "Full log: $LOG_FILE" | tee -a $LOG_FILE
     exit 1
 fi
 
@@ -175,23 +182,27 @@ fi
 # =============================================================================
 echo "Installing main packages..." | tee -a $LOG_FILE
 apt_install "utilities" mc screen fail2ban ssl-cert || exit 1
-apt_install "apache2 + mariadb" apache2 mariadb-server curl unzip || exit 1
+apt_install "apache2" apache2 curl unzip || exit 1
 
-# Remove rpcbind if present (not needed on web servers, reduces attack surface)
 apt-get purge -y rpcbind 2>/dev/null || true
 
 # =============================================================================
-# PHP-FPM installation
-#
-# Removed from default set:
-#   - php-imap:    deprecated since PHP 8.2, removed from core in 8.4
-#   - php-imagick: PECL imagick has no stable PHP 8.4 release as of 2026-Q1
-#                  (installed below as optional)
+# Database server install
 # =============================================================================
-echo "Installing PHP-FPM ${PHP_VER} and modules..." | tee -a $LOG_FILE
+if [ "$DATABASE" = "mariadb" ]; then
+    apt_install "mariadb-server" mariadb-server || exit 1
+else
+    apt_install "postgresql" postgresql postgresql-contrib || exit 1
+fi
+
+# =============================================================================
+# PHP-FPM installation (mysql + pgsql modules — both, regardless of DB choice)
+# =============================================================================
+echo "Installing PHP-FPM ${PHP_VER} and modules (incl. both DB drivers)..." | tee -a $LOG_FILE
 apt_install "PHP-FPM ${PHP_VER} core" \
     php${PHP_VER}-fpm \
-    php${PHP_VER}-mysql php${PHP_VER}-cli php${PHP_VER}-common \
+    php${PHP_VER}-mysql php${PHP_VER}-pgsql \
+    php${PHP_VER}-cli php${PHP_VER}-common \
     php${PHP_VER}-ldap php${PHP_VER}-xml php${PHP_VER}-curl \
     php${PHP_VER}-mbstring php${PHP_VER}-zip php${PHP_VER}-bcmath \
     php${PHP_VER}-gd php${PHP_VER}-soap php${PHP_VER}-bz2 \
@@ -201,11 +212,9 @@ apt_install "PHP-FPM ${PHP_VER} core" \
 systemctl daemon-reload
 if ! dpkg-query -W -f='${Status}' php${PHP_VER}-fpm 2>/dev/null | grep -q "install ok installed"; then
     echo "ERROR: php${PHP_VER}-fpm package not installed after apt-get success" | tee -a $LOG_FILE
-    echo "       Check $LOG_FILE for dpkg errors." | tee -a $LOG_FILE
     exit 1
 fi
 
-# Optional: imagick (may not be available on all distros for PHP 8.4)
 if DEBIAN_FRONTEND=noninteractive apt-get install -y php${PHP_VER}-imagick >> $LOG_FILE 2>&1; then
     echo "  + php${PHP_VER}-imagick installed" | tee -a $LOG_FILE
 else
@@ -233,74 +242,93 @@ systemctl enable php${PHP_VER}-fpm >> $LOG_FILE 2>&1
 systemctl start  php${PHP_VER}-fpm >> $LOG_FILE 2>&1
 
 # =============================================================================
-# Configure MariaDB
+# Configure database server
 # =============================================================================
-echo "Configuring MariaDB server..." | tee -a $LOG_FILE
-
-mysql -u root mysql >> $LOG_FILE 2>&1 <<EOF
+if [ "$DATABASE" = "mariadb" ]; then
+    echo "Configuring MariaDB server..." | tee -a $LOG_FILE
+    mysql -u root mysql >> $LOG_FILE 2>&1 <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT';
 CREATE USER IF NOT EXISTS 'rooty'@'localhost' IDENTIFIED BY '$MYSQL_ROOT';
 GRANT ALL PRIVILEGES ON *.* TO 'rooty'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOF
-
-if [ $? -eq 0 ]; then
-    echo "MariaDB configuration completed successfully." | tee -a $LOG_FILE
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to configure MariaDB. Aborting." | tee -a $LOG_FILE
+        exit 1
+    fi
+    echo "MariaDB configuration completed." | tee -a $LOG_FILE
 else
-    echo "ERROR: Failed to configure MariaDB. Aborting." | tee -a $LOG_FILE
-    exit 1
+    echo "Configuring PostgreSQL server..." | tee -a $LOG_FILE
+    sudo -u postgres psql >> $LOG_FILE 2>&1 <<EOF
+ALTER USER postgres WITH PASSWORD '$PG_PASS';
+EOF
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to set postgres password. Aborting." | tee -a $LOG_FILE
+        exit 1
+    fi
+    # Allow scram-sha-256 password auth over local TCP so phpPgAdmin can log in.
+    PG_HBA=$(sudo -u postgres psql -tAc "SHOW hba_file" 2>/dev/null)
+    if [ -n "$PG_HBA" ] && [ -f "$PG_HBA" ]; then
+        if grep -qE '^host\s+all\s+all\s+127\.0\.0\.1/32' "$PG_HBA"; then
+            sed -i -E 's|^(host\s+all\s+all\s+127\.0\.0\.1/32)\s+\S+|\1                       scram-sha-256|' "$PG_HBA"
+        else
+            echo "host    all             all             127.0.0.1/32            scram-sha-256" >> "$PG_HBA"
+        fi
+        if grep -qE '^host\s+all\s+all\s+::1/128' "$PG_HBA"; then
+            sed -i -E 's|^(host\s+all\s+all\s+::1/128)\s+\S+|\1                            scram-sha-256|' "$PG_HBA"
+        else
+            echo "host    all             all             ::1/128                 scram-sha-256" >> "$PG_HBA"
+        fi
+        systemctl reload postgresql >> $LOG_FILE 2>&1
+    fi
+    echo "PostgreSQL configuration completed." | tee -a $LOG_FILE
 fi
 
 # =============================================================================
-# Install phpMyAdmin (latest stable release)
+# Install web admin UI
 # =============================================================================
-echo "Installing phpMyAdmin (latest) with PHP-FPM support..." | tee -a $LOG_FILE
+if [ "$DATABASE" = "mariadb" ]; then
+    # ---------- phpMyAdmin ----------
+    echo "Installing phpMyAdmin (latest) with PHP-FPM support..." | tee -a $LOG_FILE
+    cd /tmp
+    wget -q "$PHPMYADMIN_URL" -O phpMyAdmin.zip
+    if [ ! -s phpMyAdmin.zip ]; then
+        echo "ERROR: phpMyAdmin download failed" | tee -a $LOG_FILE
+        exit 1
+    fi
+    unzip -q phpMyAdmin.zip
+    PMA_DIR=$(ls -d phpMyAdmin-*-all-languages 2>/dev/null | head -1)
+    if [ -z "$PMA_DIR" ] || [ ! -d "$PMA_DIR" ]; then
+        echo "ERROR: phpMyAdmin extraction failed" | tee -a $LOG_FILE
+        exit 1
+    fi
+    rm -rf /usr/share/phpmyadmin
+    mv "$PMA_DIR" /usr/share/phpmyadmin
+    rm phpMyAdmin.zip
+    cd - >/dev/null
+    chown -R www-data:www-data /usr/share/phpmyadmin
 
-cd /tmp
-wget -q "$PHPMYADMIN_URL" -O phpMyAdmin.zip
-if [ ! -s phpMyAdmin.zip ]; then
-    echo "ERROR: phpMyAdmin download failed" | tee -a $LOG_FILE
-    exit 1
-fi
-unzip -q phpMyAdmin.zip
-PMA_DIR=$(ls -d phpMyAdmin-*-all-languages 2>/dev/null | head -1)
-if [ -z "$PMA_DIR" ] || [ ! -d "$PMA_DIR" ]; then
-    echo "ERROR: phpMyAdmin extraction failed" | tee -a $LOG_FILE
-    exit 1
-fi
-rm -rf /usr/share/phpmyadmin
-mv "$PMA_DIR" /usr/share/phpmyadmin
-rm phpMyAdmin.zip
-cd - >/dev/null
-
-chown -R www-data:www-data /usr/share/phpmyadmin
-
-mysql -u rooty -p"$MYSQL_ROOT" < /usr/share/phpmyadmin/sql/create_tables.sql >> $LOG_FILE 2>&1
-mysql -u rooty -p"$MYSQL_ROOT" >> $LOG_FILE 2>&1 <<EOF
+    mysql -u rooty -p"$MYSQL_ROOT" < /usr/share/phpmyadmin/sql/create_tables.sql >> $LOG_FILE 2>&1
+    mysql -u rooty -p"$MYSQL_ROOT" >> $LOG_FILE 2>&1 <<EOF
 GRANT ALL PRIVILEGES ON phpmyadmin.* TO 'phpmyadmin'@'localhost' IDENTIFIED BY '$MYSQL_ROOT';
 FLUSH PRIVILEGES;
 EOF
+    mkdir -p /var/lib/phpmyadmin/tmp
+    chown www-data:www-data /var/lib/phpmyadmin/tmp
 
-mkdir -p /var/lib/phpmyadmin/tmp
-chown www-data:www-data /var/lib/phpmyadmin/tmp
-
-# --- phpMyAdmin PHP-FPM pool ---
-cat > /etc/php/${PHP_VER}/fpm/pool.d/phpmyadmin.conf <<EOF
+    cat > /etc/php/${PHP_VER}/fpm/pool.d/phpmyadmin.conf <<EOF
 [phpmyadmin]
 user = www-data
 group = www-data
-
 listen = /run/php/php${PHP_VER}-fpm-phpmyadmin.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
-
 pm = dynamic
 pm.max_children = 5
 pm.start_servers = 1
 pm.min_spare_servers = 1
 pm.max_spare_servers = 3
-
 php_admin_value[open_basedir] = /usr/share/phpmyadmin/:/etc/phpmyadmin/:/var/lib/phpmyadmin/:/usr/share/php/:/usr/share/javascript/:/tmp
 php_admin_value[upload_tmp_dir] = /var/lib/phpmyadmin/tmp
 php_admin_value[session.save_path] = /var/lib/phpmyadmin/tmp
@@ -310,8 +338,7 @@ php_admin_value[post_max_size] = 32M
 php_admin_value[upload_max_filesize] = 32M
 EOF
 
-# --- phpMyAdmin Apache configuration ---
-cat > /etc/apache2/conf-available/phpmyadmin.conf <<EOF
+    cat > /etc/apache2/conf-available/phpmyadmin.conf <<EOF
 # phpMyAdmin Apache configuration for PHP-FPM
 Alias /$PHPMYADMIN_DIR /usr/share/phpmyadmin
 
@@ -321,7 +348,7 @@ Alias /$PHPMYADMIN_DIR /usr/share/phpmyadmin
     AllowOverride All
     Require all granted
 
-    <FilesMatch "\.php$">
+    <FilesMatch "\.php\$">
         SetHandler "proxy:unix:/run/php/php${PHP_VER}-fpm-phpmyadmin.sock|fcgi://localhost"
     </FilesMatch>
 </Directory>
@@ -337,7 +364,7 @@ Alias /$PHPMYADMIN_DIR /usr/share/phpmyadmin
 </Directory>
 EOF
 
-cat > /usr/share/phpmyadmin/config.inc.php <<EOF
+    cat > /usr/share/phpmyadmin/config.inc.php <<EOF
 <?php
 \$i = 0;
 \$i++;
@@ -348,14 +375,82 @@ cat > /usr/share/phpmyadmin/config.inc.php <<EOF
 \$cfg['Servers'][\$i]['auth_type'] = 'cookie';
 \$cfg['Servers'][\$i]['user'] = '';
 \$cfg['Servers'][\$i]['password'] = '';
-
 \$cfg['blowfish_secret'] = '${BLOWFISH_SECRET}';
 \$cfg['DefaultLang'] = 'en';
 \$cfg['ServerDefault'] = 1;
 \$cfg['UploadDir'] = '';
 \$cfg['SaveDir'] = '';
 EOF
-chown www-data:www-data /usr/share/phpmyadmin/config.inc.php
+    chown www-data:www-data /usr/share/phpmyadmin/config.inc.php
+    a2enconf phpmyadmin >> $LOG_FILE 2>&1
+else
+    # ---------- phpPgAdmin ----------
+    echo "Installing phpPgAdmin ${PHPPGADMIN_VER} with PHP-FPM support..." | tee -a $LOG_FILE
+    cd /tmp
+    wget -qL "$PHPPGADMIN_URL" -O phpPgAdmin.tar.gz
+    if [ ! -s phpPgAdmin.tar.gz ]; then
+        echo "ERROR: phpPgAdmin download failed (URL: $PHPPGADMIN_URL)" | tee -a $LOG_FILE
+        exit 1
+    fi
+    tar -xzf phpPgAdmin.tar.gz
+    PGA_DIR=$(ls -d phpPgAdmin-* 2>/dev/null | head -1)
+    if [ -z "$PGA_DIR" ] || [ ! -d "$PGA_DIR" ]; then
+        echo "ERROR: phpPgAdmin extraction failed" | tee -a $LOG_FILE
+        exit 1
+    fi
+    rm -rf /usr/share/phppgadmin
+    mv "$PGA_DIR" /usr/share/phppgadmin
+    rm phpPgAdmin.tar.gz
+    cd - >/dev/null
+    chown -R www-data:www-data /usr/share/phppgadmin
+
+    if [ -f /usr/share/phppgadmin/conf/config.inc.php ]; then
+        sed -i "s|\$conf\['servers'\]\[0\]\['host'\] = '';|\$conf['servers'][0]['host'] = 'localhost';|" \
+            /usr/share/phppgadmin/conf/config.inc.php
+        sed -i "s|\$conf\['extra_login_security'\] = true;|\$conf['extra_login_security'] = false;|" \
+            /usr/share/phppgadmin/conf/config.inc.php
+    fi
+
+    mkdir -p /var/lib/phppgadmin/tmp
+    chown www-data:www-data /var/lib/phppgadmin/tmp
+
+    cat > /etc/php/${PHP_VER}/fpm/pool.d/phppgadmin.conf <<EOF
+[phppgadmin]
+user = www-data
+group = www-data
+listen = /run/php/php${PHP_VER}-fpm-phppgadmin.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = dynamic
+pm.max_children = 5
+pm.start_servers = 1
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+php_admin_value[open_basedir] = /usr/share/phppgadmin/:/var/lib/phppgadmin/:/usr/share/php/:/tmp
+php_admin_value[upload_tmp_dir] = /var/lib/phppgadmin/tmp
+php_admin_value[session.save_path] = /var/lib/phppgadmin/tmp
+php_admin_value[memory_limit] = 128M
+php_admin_value[max_execution_time] = 300
+EOF
+
+    cat > /etc/apache2/conf-available/phppgadmin.conf <<EOF
+# phpPgAdmin Apache configuration for PHP-FPM
+Alias /$PHPPGADMIN_DIR /usr/share/phppgadmin
+
+<Directory /usr/share/phppgadmin>
+    Options SymLinksIfOwnerMatch
+    DirectoryIndex index.php
+    AllowOverride All
+    Require all granted
+
+    <FilesMatch "\.php\$">
+        SetHandler "proxy:unix:/run/php/php${PHP_VER}-fpm-phppgadmin.sock|fcgi://localhost"
+    </FilesMatch>
+</Directory>
+EOF
+    a2enconf phppgadmin >> $LOG_FILE 2>&1
+fi
 
 # =============================================================================
 # Apache main configuration
@@ -409,7 +504,6 @@ AccessFileName .htaccess
     Require all denied
 </FilesMatch>
 
-# Use %a (real client IP after mod_remoteip) instead of %h (raw connection IP)
 LogFormat "%v:%p %a %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" vhost_combined
 LogFormat "%a %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" combined
 LogFormat "%a %l %u %t \"%r\" %>s %O" common
@@ -420,20 +514,13 @@ IncludeOptional conf-enabled/*.conf
 IncludeOptional sites-enabled/*.conf
 APACHEEOF
 
-# =============================================================================
-# Security configuration
-# =============================================================================
 cat > /etc/apache2/conf-available/security.conf <<'EOF'
 ServerTokens Prod
 ServerSignature Off
 TraceEnable Off
 EOF
 
-# =============================================================================
-# MPM Event configuration
-# =============================================================================
 cat > /etc/apache2/mods-available/mpm_event.conf <<'EOF'
-# event MPM optimized for HTTP/2
 <IfModule mpm_event_module>
     StartServers              4
     MinSpareThreads          25
@@ -447,30 +534,22 @@ cat > /etc/apache2/mods-available/mpm_event.conf <<'EOF'
 </IfModule>
 EOF
 
-# =============================================================================
-# HTTP/2 configuration
-# =============================================================================
 cat > /etc/apache2/conf-available/http2.conf <<'EOF'
 Protocols h2 http/1.1
 
 <IfModule mod_http2.c>
     H2Direct on
     H2Upgrade on
-
     H2StreamMaxMemSize 65536
     H2MaxSessionStreams 100
     H2MaxWorkers 400
     H2WindowSize 65535
 </IfModule>
 EOF
-
 a2enconf http2 >> $LOG_FILE 2>&1
 
-# =============================================================================
-# MySQL/MariaDB client configuration
-# =============================================================================
-cat > /etc/mysql/debian.cnf <<EOF
-# Automatically generated. DO NOT TOUCH!
+if [ "$DATABASE" = "mariadb" ]; then
+    cat > /etc/mysql/debian.cnf <<EOF
 [client]
 host     = localhost
 user     = root
@@ -483,18 +562,19 @@ password = $MYSQL_ROOT
 socket   = /var/run/mysqld/mysqld.sock
 basedir  = /usr
 EOF
-chmod 600 /etc/mysql/debian.cnf
+    chmod 600 /etc/mysql/debian.cnf
 
-cat > /etc/mysql/conf.d/mysql.cnf <<'EOF'
+    cat > /etc/mysql/conf.d/mysql.cnf <<'EOF'
 [mysql]
 
 [mysqld]
 innodb_autoinc_lock_mode=0
 EOF
-chmod 644 /etc/mysql/conf.d/mysql.cnf
+    chmod 644 /etc/mysql/conf.d/mysql.cnf
+fi
 
 # =============================================================================
-# Configure mod_remoteip for Cloudflare (replaces deprecated mod_cloudflare)
+# Cloudflare mod_remoteip
 # =============================================================================
 echo "Configuring mod_remoteip for Cloudflare..." | tee -a $LOG_FILE
 a2enmod remoteip >> $LOG_FILE 2>&1
@@ -503,9 +583,7 @@ CF_IPV4=$(curl -s --max-time 10 https://www.cloudflare.com/ips-v4 || true)
 CF_IPV6=$(curl -s --max-time 10 https://www.cloudflare.com/ips-v6 || true)
 
 {
-    echo "# Cloudflare real-IP configuration via mod_remoteip"
-    echo "# IP list fetched from cloudflare.com/ips/ at install time"
-    echo ""
+    echo "# Cloudflare real-IP via mod_remoteip"
     echo "RemoteIPHeader CF-Connecting-IP"
     echo ""
     if [ -n "$CF_IPV4" ]; then
@@ -521,13 +599,11 @@ CF_IPV6=$(curl -s --max-time 10 https://www.cloudflare.com/ips-v6 || true)
 } > /etc/apache2/conf-available/cloudflare.conf
 
 a2enconf cloudflare >> $LOG_FILE 2>&1
+a2enconf security   >> $LOG_FILE 2>&1
 
 # =============================================================================
-# Enable Apache configurations and restart services
+# Test config + restart
 # =============================================================================
-a2enconf phpmyadmin  >> $LOG_FILE 2>&1
-a2enconf security    >> $LOG_FILE 2>&1
-
 apache2ctl configtest 2>&1 | tee -a $LOG_FILE
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo "ERROR: Apache configuration test failed. Check $LOG_FILE" | tee -a $LOG_FILE
@@ -538,7 +614,7 @@ systemctl restart php${PHP_VER}-fpm >> $LOG_FILE 2>&1
 systemctl restart apache2           >> $LOG_FILE 2>&1
 
 # =============================================================================
-# Install Composer (PHP dependency manager)
+# Composer
 # =============================================================================
 echo "Installing Composer..." | tee -a $LOG_FILE
 cd /tmp
@@ -552,18 +628,36 @@ rm -f composer-setup.php
 cd - >/dev/null
 
 # =============================================================================
+# Save state for other action scripts
+# =============================================================================
+{
+    echo "# Generated by web_server_script — do not edit by hand"
+    echo "WEB_SERVER=apache"
+    echo "DATABASE=$DATABASE"
+    echo "PHP_VER=$PHP_VER"
+    [ "$DATABASE" = "mariadb" ] && echo "PHPMYADMIN_DIR=$PHPMYADMIN_DIR"
+    [ "$DATABASE" = "pgsql"   ] && echo "PHPPGADMIN_DIR=$PHPPGADMIN_DIR"
+    echo "INSTALLED_AT=$(date -u +%FT%TZ)"
+} > "$STATE_FILE"
+chmod 644 "$STATE_FILE"
+
+# =============================================================================
 echo ""
 echo "============================================================"
 echo " Installation completed successfully!"
 echo "============================================================"
 echo ""
 echo "OS              : $PRETTY_NAME"
+echo "Web server      : Apache (MPM Event, HTTP/2)"
 echo "PHP-FPM         : ${PHP_VER}"
-echo "MPM             : Event (HTTP/2 enabled)"
+echo "Database        : ${DATABASE}"
 echo "Cloudflare IPs  : mod_remoteip configured"
-echo "phpMyAdmin URL  : http://<server>/${PHPMYADMIN_DIR}"
+if [ "$DATABASE" = "mariadb" ]; then
+    echo "phpMyAdmin URL  : http://<server>/${PHPMYADMIN_DIR}"
+else
+    echo "phpPgAdmin URL  : http://<server>/${PHPPGADMIN_DIR}"
+fi
+echo "State file      : $STATE_FILE"
 echo ""
-echo "Quick checks:"
-echo "  apache2ctl -M | grep -E 'mpm|http2|remoteip'"
-echo "  systemctl status php${PHP_VER}-fpm apache2 mariadb"
+echo "Next: add a site with apache/add-site.sh"
 echo ""

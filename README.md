@@ -1,18 +1,12 @@
 # Web Server Script
 
-Universal LAMP web-server installer and site manager for Debian / Ubuntu.
+Universal LAMP / LEMP web-server installer and site manager for Debian / Ubuntu.
 
-**Stack:** Apache 2.4 (MPM Event) + PHP-FPM 8.4 + MariaDB + phpMyAdmin + HTTP/2 + `mod_remoteip` (Cloudflare real-IP)
+**Pick at install time:**
+- Web server: **Apache** (mpm_event + PHP-FPM via mod_proxy_fcgi) **or Nginx** (PHP-FPM via fastcgi_pass)
+- Database: **MariaDB** (with phpMyAdmin) **or PostgreSQL** (with phpPgAdmin)
 
-**Tested on:**
-
-| OS | Codename | PHP source | PHP version |
-|---|---|---|---|
-| Debian 12 | bookworm | sury.org | 8.4.20 |
-| Debian 13 | trixie | native | 8.4.16 |
-| Ubuntu 22.04 | jammy | ondrej PPA | 8.4.20 |
-| Ubuntu 24.04 | noble | ondrej PPA | 8.4.20 |
-| Ubuntu 26.04 | resolute | native (`PHP_VER=8.5`) | 8.5.4 |
+PHP-FPM 8.4 (8.5 on Ubuntu 26.04 native), HTTP/2, Cloudflare real-IP, Composer, fail2ban included on every stack.
 
 ---
 
@@ -28,140 +22,166 @@ or with `wget`:
 bash <(wget -qO- https://raw.githubusercontent.com/DaveBugg/web_server_script/main/web-server.sh)
 ```
 
-You'll see a menu:
+Menu:
 
 ```
 =================================================================
-  Web Server Manager
+  Web Server Manager  v4.0
 =================================================================
-  System    : Ubuntu 24.04.5 LTS
-  Web server: not installed
-  PHP-FPM   : not detected
+  System    : Debian GNU/Linux 13 (trixie)
+  Web server: <none>  (not installed)
+  Database  : <none>
+  PHP-FPM   : <none>
   Sites     : 0
 -----------------------------------------------------------------
-  1) Install web server         (Apache + PHP-FPM + MariaDB + phpMyAdmin)
-  2) Add new site               (vhost + isolated PHP-FPM pool + SSL)
-  3) Remove a site              (vhost + pool + optional user/files/cert)
-  4) Uninstall everything       (destructive — purges all packages + data)
+  1) Install web server         (pick Apache/Nginx + MariaDB/PostgreSQL)
+  2) Add new site               (vhost + isolated FPM pool + optional DB)
+  3) Remove a site              (vhost + pool + optional user/files/cert/DB)
+  4) Uninstall everything       (destructive — purges packages + data)
   0) Exit
 -----------------------------------------------------------------
 Select an action [0-4]:
 ```
 
+When you pick **1) Install** on a fresh server, the menu asks two questions
+(web server, database) and then runs the matching installer. The choice is
+persisted in `/etc/web_server_script.conf`. Subsequent actions (Add/Remove
+site, Uninstall) automatically route to the correct sub-script — you don't
+get asked the stack question again.
+
+**Tested on:** Debian 12/13 and Ubuntu 22.04/24.04/26.04 with all 4 stack combos
+(Apache+MariaDB, Apache+PostgreSQL, Nginx+MariaDB, Nginx+PostgreSQL).
+
 ---
 
 ## Direct invocation (skip the menu)
 
-Each action is also a standalone script — call it directly:
+The repo is split into `apache/` and `nginx/` directories. Each has its own
+4 actions. Choose the one matching the stack you want / have.
 
-### 1. Install web server
+### Apache stack
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/install.sh)
+# Install — interactive (asks DB choice)
+bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/apache/install.sh)
+
+# Add a site
+bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/apache/add-site.sh)
+
+# Remove a site
+bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/apache/remove-site.sh)
+
+# Uninstall everything
+bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/apache/uninstall.sh)
 ```
 
-Non-interactive (CI / Ansible / cloud-init):
+### Nginx stack
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/install.sh | \
+bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/nginx/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/nginx/add-site.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/nginx/remove-site.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/nginx/uninstall.sh)
+```
+
+### Non-interactive (CI / Ansible / cloud-init)
+
+Every script honours env-var overrides — interactive prompts only fire for
+unset variables. Examples:
+
+```bash
+# Install Apache + MariaDB without prompts
+curl -fsSL .../apache/install.sh | \
+  DATABASE=mariadb \
   MYSQL_ROOT='SecureRoot123!' \
   PHPMYADMIN_DIR='myadmin42' \
   bash
-```
 
-For Ubuntu 26.04 (until ondrej PPA adds `resolute`):
+# Install Nginx + PostgreSQL
+curl -fsSL .../nginx/install.sh | \
+  DATABASE=pgsql \
+  PG_PASS='SecurePg123!' \
+  PHPPGADMIN_DIR='mypga' \
+  bash
 
-```bash
-curl -fsSL .../install.sh | PHP_VER=8.5 MYSQL_ROOT='...' PHPMYADMIN_DIR='...' bash
-```
-
-### 2. Add new site
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/add-site.sh)
-```
-
-Non-interactive:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/add-site.sh | \
+# Add site with auto-generated DB
+curl -fsSL .../apache/add-site.sh | \
   DOMAIN=example.com \
   NEWUSER=example \
   SITE_PASS='SitePass123!' \
   SSL_SETUP=y \
   CERTBOT_EMAIL=admin@example.com \
+  CREATE_DB=yes \
+  DB_NAME=example_db \
+  DB_USER=example_user \
   bash
-```
+# DB_PASS is auto-generated (24 chars) and saved to /www/example.com/db.txt
 
-### 3. Remove a site
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/remove-site.sh)
-```
-
-The script lists all configured sites and lets you pick one (or pass `DOMAIN=`):
-
-```bash
-curl -fsSL .../remove-site.sh | \
+# Remove site + drop DB + drop user
+curl -fsSL .../nginx/remove-site.sh | \
   DOMAIN=example.com \
-  DELETE_USER=yes \
-  DELETE_FILES=yes \
-  DELETE_CERT=yes \
-  FORCE=yes \
-  bash
+  DELETE_USER=yes DELETE_FILES=yes DELETE_CERT=yes DELETE_DB=yes \
+  FORCE=yes bash
+
+# Uninstall
+curl -fsSL .../apache/uninstall.sh | FORCE=yes DELETE_CERTS=yes bash
 ```
 
-### 4. Uninstall everything (destructive)
-
+For Ubuntu 26.04 (where `ondrej/php` PPA may not yet have `resolute`):
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DaveBugg/web_server_script/main/uninstall.sh)
-```
-
-Requires typing `YES, DELETE EVERYTHING` to confirm. Skip the prompt with `FORCE=yes`:
-
-```bash
-curl -fsSL .../uninstall.sh | FORCE=yes DELETE_CERTS=yes bash
+curl -fsSL .../apache/install.sh | \
+  PHP_VER=8.5 DATABASE=mariadb MYSQL_ROOT='...' PHPMYADMIN_DIR='...' bash
 ```
 
 ---
 
 ## What gets installed
 
-**`install.sh`:**
+**Both stacks (Apache and Nginx) install:**
 
-- Apache 2.4 with MPM Event, `mod_proxy_fcgi`, `mod_http2`, `mod_remoteip`, `mod_ssl`, `mod_headers`
-- PHP-FPM 8.4 (or 8.5 via `PHP_VER`) with: mysql, cli, ldap, xml, curl, mbstring, zip, bcmath, gd, soap, bz2, intl, gmp, redis, imagick (optional)
-- MariaDB server with secure root password
-- phpMyAdmin (latest stable, downloaded from phpmyadmin.net) on a dedicated PHP-FPM pool, served at `/<your-alias>`
-- Cloudflare IP ranges automatically configured via `mod_remoteip` (so logs show real visitor IPs)
-- HTTP/2 enabled
-- Composer (latest stable, installed to `/usr/local/bin/composer`)
-- `fail2ban` for SSH brute-force protection
-- `mc`, `screen` utilities
+- PHP-FPM with: mysql, **pgsql** (both DB drivers regardless of choice — for site flexibility), cli, ldap, xml, curl, mbstring, zip, bcmath, gd, soap, bz2, intl, gmp, redis, imagick (optional)
+- Composer (latest stable)
+- fail2ban for SSH brute-force protection
+- mc, screen utilities
+- Cloudflare IP ranges auto-fetched and configured (`mod_remoteip` for Apache, `set_real_ip_from` for Nginx)
+- HTTP/2
+
+**MariaDB stack adds:** mariadb-server + phpMyAdmin (latest from phpmyadmin.net) on a dedicated PHP-FPM pool, served at `/<your-alias>`
+
+**PostgreSQL stack adds:** postgresql + postgresql-contrib + phpPgAdmin 7.13 (from upstream tarball) on a dedicated PHP-FPM pool, served at `/<your-alias>`. `pg_hba.conf` is configured for scram-sha-256 password auth on localhost so phpPgAdmin can log in.
 
 **`add-site.sh`** for each domain creates:
 
-- Apache vhost with HTTP→HTTPS redirect, HTTP/2, security headers (HSTS, X-Frame-Options, etc.)
-- A dedicated PHP-FPM pool with `open_basedir` jail to `/www/$DOMAIN`
+- Web server vhost / server block with HTTP→HTTPS redirect, HTTP/2, security headers (HSTS, X-Frame-Options, etc.)
+- Dedicated PHP-FPM pool with `open_basedir` jail to `/www/$DOMAIN`
 - A system user owning the site files (separate from www-data — site can't escape its sandbox)
 - Cron job for PHP session cleanup
 - `logrotate` config
 - Optional Let's Encrypt SSL via Certbot (auto-redirect to HTTPS, TLSv1.2/1.3 only)
-- Bare-IP catch-all vhost that returns 403 (so the server only responds to known hostnames)
+- **Optional per-site database** — when `CREATE_DB=yes`:
+  - Asks (or accepts via env) `DB_NAME`, `DB_USER`
+  - Generates a 24-char password if `DB_PASS` not provided
+  - Creates DB + user with full privileges on that DB only
+  - Saves credentials to `/www/$DOMAIN/db.txt` (mode 600, owner = site user)
+  - Echoes the password to stdout once at the end
 
 ---
 
 ## Filesystem layout
 
 ```
-/etc/apache2/sites-available/<domain>.conf   ← vhost
+/etc/web_server_script.conf                  ← stack info (WEB_SERVER, DATABASE, PHP_VER, ...)
+/etc/apache2/sites-available/<domain>.conf   ← Apache vhost
+   OR
+/etc/nginx/sites-available/<domain>          ← Nginx server block
 /etc/php/<ver>/fpm/pool.d/<domain>.conf      ← per-site FPM pool
 /etc/cron.d/php-sessions-<domain>            ← session cleanup
 /etc/logrotate.d/<domain>.conf               ← log rotation
-/run/php/php<ver>-fpm-<domain>.sock          ← FPM socket
+/run/php/php<ver>-fpm-<domain>.sock          ← FPM socket (per site)
 /www/<domain>/www                            ← document root (owner: site user, group: www-data, 750)
-/www/<domain>/logs                           ← Apache + PHP error logs
+/www/<domain>/logs                           ← Web server + PHP error logs
 /www/<domain>/tmp                            ← uploads + sessions
+/www/<domain>/db.txt                         ← (if CREATE_DB) mode 600
 ```
 
 After deploying app code:
@@ -175,14 +195,15 @@ chmod -R 750 /www/<domain>/www
 
 ## Forking / customising
 
-The menu script (`web-server.sh`) downloads each action from GitHub. To use your own fork or branch, set `REPO_URL`:
+The menu downloads each action from GitHub. To use your own fork or branch:
 
 ```bash
 REPO_URL=https://raw.githubusercontent.com/myname/web_server_script/dev \
   bash <(curl -fsSL "$REPO_URL/web-server.sh")
 ```
 
-Each sub-script is fully self-contained — no shared library, no external dependencies beyond `apt`, `curl`, `wget`.
+Each sub-script is fully self-contained — no shared library, no external
+dependencies beyond `apt`, `curl`, `wget`, `unzip`, `tar`.
 
 ---
 
@@ -190,6 +211,12 @@ Each sub-script is fully self-contained — no shared library, no external depen
 
 - Run as `root` (or via `sudo`).
 - Install log: `install.log` (in the working directory).
-- The script intentionally does NOT run `apt-get upgrade -y` — it would pull hundreds of MB of unrelated packages (kernel, firmware) and dramatically slow the install. Run `apt-get upgrade` manually afterwards if you want a full security refresh.
-- `apt-get install` already pulls the latest version of every package the script needs from the enabled repos.
-- The install script is idempotent for repos but NOT for site/user creation — re-running it will re-prompt for MySQL root password, which will fail because root already has a password. Use `add-site.sh` for additional sites; use `uninstall.sh` + `install.sh` for a complete reset.
+- The script intentionally does NOT run `apt-get upgrade -y` — it would pull
+  hundreds of MB of unrelated packages (kernel, firmware) and dramatically
+  slow the install. Run `apt-get upgrade` manually afterwards if you want a
+  full security refresh.
+- One web server + one database per host. To switch stacks, run `uninstall.sh`
+  then `install.sh` again with the new choice.
+- Both PHP DB drivers (`php-mysql` and `php-pgsql`) are installed regardless
+  of which DB you pick — this makes individual sites portable if you later
+  need to point one at a different DB.
