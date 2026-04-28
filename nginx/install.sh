@@ -317,10 +317,11 @@ ln -sf /etc/nginx/sites-available/000-default /etc/nginx/sites-enabled/000-defau
 # We only adjust server_tokens and worker tuning here.
 mkdir -p /etc/nginx/conf.d
 cat > /etc/nginx/conf.d/00-tuning.conf <<'EOF'
+# Additional nginx tuning. The stock Debian/Ubuntu /etc/nginx/nginx.conf
+# already enables `gzip on;` and sane defaults — we only ADD here.
 server_tokens off;
 client_max_body_size 32M;
 keepalive_timeout 65;
-gzip on;
 gzip_types text/plain text/css application/javascript application/json image/svg+xml;
 gzip_min_length 1024;
 EOF
