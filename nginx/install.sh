@@ -400,28 +400,35 @@ EOF
 
     # Nginx admin location snippet — included from each vhost (so admin UI
     # works under every domain at /<alias>/) AND from the IP-block server.
+    #
+    # Pattern: prefix-location with `alias` for the dir, then a NESTED regex
+    # location that captures the file path into \$1 and aliases each PHP file
+    # individually. This is the only reliable way to combine `alias` + PHP-FPM
+    # in nginx — the more obvious `location ~ ^/<alias>/(.*)` pattern breaks
+    # \$request_filename and FPM gets "Primary script unknown".
     cat > /etc/nginx/snippets/admin-pma.conf <<EOF
 # phpMyAdmin: served at /${PHPMYADMIN_DIR}
-location ~ ^/${PHPMYADMIN_DIR}(?:/(.*))?\$ {
-    alias /usr/share/phpmyadmin/\$1;
+location /${PHPMYADMIN_DIR} {
+    alias /usr/share/phpmyadmin/;
+    index index.php;
 
-    location ~ \\.php\$ {
-        fastcgi_pass   unix:/run/php/php${PHP_VER}-fpm-phpmyadmin.sock;
-        fastcgi_index  index.php;
-        fastcgi_param  SCRIPT_FILENAME \$request_filename;
-        include        fastcgi_params;
+    location ~ ^/${PHPMYADMIN_DIR}/(.+\\.php)\$ {
+        alias /usr/share/phpmyadmin/\$1;
+        fastcgi_pass  unix:/run/php/php${PHP_VER}-fpm-phpmyadmin.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$request_filename;
+        include       fastcgi_params;
     }
 
-    location ~* \\.(css|js|png|jpg|gif|svg|woff2?)\$ {
+    location ~ ^/${PHPMYADMIN_DIR}/(.+\\.(css|js|png|jpg|gif|svg|woff2?))\$ {
+        alias /usr/share/phpmyadmin/\$1;
         expires 7d;
         access_log off;
     }
 
-    index index.php;
-}
-
-location ~ ^/${PHPMYADMIN_DIR}/(setup/lib|libraries|templates) {
-    deny all;
+    location ~ ^/${PHPMYADMIN_DIR}/(setup/lib|libraries|templates) {
+        deny all;
+    }
 }
 EOF
 else
@@ -469,24 +476,27 @@ php_admin_value[memory_limit] = 128M
 php_admin_value[max_execution_time] = 300
 EOF
 
+    # Same alias+nested-regex pattern as the phpMyAdmin snippet (see comment
+    # above) — needed for nginx to serve PHP files via PHP-FPM under an alias.
     cat > /etc/nginx/snippets/admin-pga.conf <<EOF
 # phpPgAdmin: served at /${PHPPGADMIN_DIR}
-location ~ ^/${PHPPGADMIN_DIR}(?:/(.*))?\$ {
-    alias /usr/share/phppgadmin/\$1;
+location /${PHPPGADMIN_DIR} {
+    alias /usr/share/phppgadmin/;
+    index index.php;
 
-    location ~ \\.php\$ {
-        fastcgi_pass   unix:/run/php/php${PHP_VER}-fpm-phppgadmin.sock;
-        fastcgi_index  index.php;
-        fastcgi_param  SCRIPT_FILENAME \$request_filename;
-        include        fastcgi_params;
+    location ~ ^/${PHPPGADMIN_DIR}/(.+\\.php)\$ {
+        alias /usr/share/phppgadmin/\$1;
+        fastcgi_pass  unix:/run/php/php${PHP_VER}-fpm-phppgadmin.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$request_filename;
+        include       fastcgi_params;
     }
 
-    location ~* \\.(css|js|png|jpg|gif|svg|woff2?)\$ {
+    location ~ ^/${PHPPGADMIN_DIR}/(.+\\.(css|js|png|jpg|gif|svg|woff2?))\$ {
+        alias /usr/share/phppgadmin/\$1;
         expires 7d;
         access_log off;
     }
-
-    index index.php;
 }
 EOF
 fi
