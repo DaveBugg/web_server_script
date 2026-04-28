@@ -1,0 +1,6 @@
+# Force LF for shell scripts and text files — they run on Linux servers,
+# CRLF would break the shebang and `read` parsing.
+*.sh         text eol=lf
+*.md         text eol=lf
+.gitignore   text eol=lf
+.gitattributes text eol=lf
