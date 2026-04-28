@@ -1,3 +1,5 @@
+🇬🇧 **English** &nbsp;|&nbsp; [🇷🇺 Русский](README.ru.md)
+
 # Web Server Script
 
 Universal LAMP / LEMP web-server installer and site manager for Debian / Ubuntu.
