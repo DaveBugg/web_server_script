@@ -596,6 +596,14 @@ EOF
     install -d -m 0750 -o www-data -g www-data /var/lib/pgadmin/storage
     install -d -m 0750 -o www-data -g www-data /var/log/pgadmin
 
+    # pgAdmin4 hardcodes its db backup path as DATA_DIR/../pgadmin4.db.bak
+    # (i.e. /var/lib/pgadmin4.db.bak). www-data can't write to /var/lib/, so
+    # pre-create the backup file with the right ownership — shutil.copyfile
+    # can overwrite an existing writable file even when its parent dir is not.
+    touch /var/lib/pgadmin4.db.bak
+    chown www-data:www-data /var/lib/pgadmin4.db.bak
+    chmod 0640 /var/lib/pgadmin4.db.bak
+
     # pgadmin4-server = pgAdmin web app + bundled venv at /usr/pgadmin4/venv,
     # WITHOUT apache2 / mod_wsgi as dependencies. Postinst reads
     # PGADMIN_SETUP_EMAIL/PASSWORD to create the first admin user automatically.
@@ -624,6 +632,7 @@ RuntimeDirectory=pgadmin4
 RuntimeDirectoryMode=0755
 WorkingDirectory=/usr/pgadmin4/web
 Environment=PYTHONPATH=/usr/pgadmin4/web
+Environment=HOME=/var/lib/pgadmin
 ExecStart=/usr/pgadmin4/venv/bin/gunicorn \\
     --workers 2 --threads 25 \\
     --bind unix:/run/pgadmin4/socket \\
