@@ -605,12 +605,23 @@ EOF
     chmod 0640 /var/lib/pgadmin4.db.bak
 
     # pgadmin4-server = pgAdmin web app + bundled venv at /usr/pgadmin4/venv,
-    # WITHOUT apache2 / mod_wsgi as dependencies. Postinst reads
-    # PGADMIN_SETUP_EMAIL/PASSWORD to create the first admin user automatically.
-    export PGADMIN_SETUP_EMAIL="$PGADMIN4_EMAIL"
-    export PGADMIN_SETUP_PASSWORD="$PGADMIN4_PASS"
-    apt_install "pgadmin4-server" pgadmin4-server || { unset PGADMIN_SETUP_EMAIL PGADMIN_SETUP_PASSWORD; exit 1; }
-    unset PGADMIN_SETUP_EMAIL PGADMIN_SETUP_PASSWORD
+    # WITHOUT apache2 / mod_wsgi as dependencies. Unlike pgadmin4-web, this
+    # package's postinst does NOT create the admin user — we have to run
+    # setup-db + add-user ourselves. (Otherwise pgAdmin4 enters interactive
+    # first-run flow at first request and crashes with EOFError under gunicorn.)
+    apt_install "pgadmin4-server" pgadmin4-server || exit 1
+
+    sudo -u www-data PYTHONPATH=/usr/pgadmin4/web \
+        /usr/pgadmin4/venv/bin/python3 /usr/pgadmin4/web/setup.py setup-db >> $LOG_FILE 2>&1 || {
+            echo "ERROR: pgAdmin4 setup-db failed (see $LOG_FILE)" | tee -a $LOG_FILE
+            exit 1
+        }
+    sudo -u www-data PYTHONPATH=/usr/pgadmin4/web \
+        /usr/pgadmin4/venv/bin/python3 /usr/pgadmin4/web/setup.py \
+        add-user "$PGADMIN4_EMAIL" "$PGADMIN4_PASS" --admin >> $LOG_FILE 2>&1 || {
+            echo "ERROR: pgAdmin4 add-user failed (see $LOG_FILE)" | tee -a $LOG_FILE
+            exit 1
+        }
 
     # Gunicorn lives in the bundled venv so it picks up the right Python deps.
     /usr/pgadmin4/venv/bin/pip install --quiet gunicorn >> $LOG_FILE 2>&1 || {
