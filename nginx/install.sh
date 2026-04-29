@@ -597,14 +597,17 @@ EOF
     install -d -m 0750 -o www-data -g www-data /var/lib/pgadmin/storage
     install -d -m 0750 -o www-data -g www-data /var/log/pgadmin
 
-    # Initialise SQLite metadata DB and create the first admin user. setup.py
-    # (when called with no subcommand) reads PGADMIN_SETUP_EMAIL/PASSWORD from
-    # the environment to provision the initial user non-interactively.
-    sudo -u www-data \
-        PGADMIN_SETUP_EMAIL="$PGADMIN4_EMAIL" \
-        PGADMIN_SETUP_PASSWORD="$PGADMIN4_PASS" \
-        /usr/pgadmin4/venv/bin/python3 /usr/pgadmin4/web/setup.py >> $LOG_FILE 2>&1 || {
-            echo "ERROR: pgAdmin4 setup.py failed (see $LOG_FILE)" | tee -a $LOG_FILE
+    # Initialise SQLite metadata DB (pgAdmin4 v7+ uses explicit subcommands).
+    sudo -u www-data PYTHONPATH=/usr/pgadmin4/web \
+        /usr/pgadmin4/venv/bin/python3 /usr/pgadmin4/web/setup.py setup-db >> $LOG_FILE 2>&1 || {
+            echo "ERROR: pgAdmin4 setup-db failed (see $LOG_FILE)" | tee -a $LOG_FILE
+            exit 1
+        }
+    # Create the first admin user.
+    sudo -u www-data PYTHONPATH=/usr/pgadmin4/web \
+        /usr/pgadmin4/venv/bin/python3 /usr/pgadmin4/web/setup.py \
+        add-user "$PGADMIN4_EMAIL" "$PGADMIN4_PASS" --admin >> $LOG_FILE 2>&1 || {
+            echo "ERROR: pgAdmin4 add-user failed (see $LOG_FILE)" | tee -a $LOG_FILE
             exit 1
         }
 
