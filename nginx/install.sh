@@ -221,8 +221,19 @@ apt-get purge -y rpcbind 2>/dev/null || true
 # DB server
 if [ "$DATABASE" = "mariadb" ]; then
     apt_install "mariadb-server" mariadb-server || exit 1
+    if ! systemctl is-active mariadb >/dev/null 2>&1; then
+        echo "  MariaDB inactive after install — reinitialising data dir..." | tee -a $LOG_FILE
+        mysql_install_db --user=mysql --basedir=/usr --datadir=/var/lib/mysql >> $LOG_FILE 2>&1 || true
+        systemctl enable mariadb >> $LOG_FILE 2>&1
+        systemctl start  mariadb >> $LOG_FILE 2>&1
+    fi
 else
     apt_install "postgresql" postgresql postgresql-contrib || exit 1
+    if ! systemctl is-active postgresql >/dev/null 2>&1; then
+        echo "  PostgreSQL inactive after install — reinitialising cluster..." | tee -a $LOG_FILE
+        PG_VER=$(dpkg -l 'postgresql-[0-9]*' 2>/dev/null | awk '/^ii/{print $2}' | grep -oE '[0-9]+$' | sort -n | tail -1)
+        [ -n "$PG_VER" ] && pg_createcluster "$PG_VER" main --start >> $LOG_FILE 2>&1 || true
+    fi
 fi
 
 # PHP-FPM (with both DB drivers)
