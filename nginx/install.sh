@@ -605,23 +605,30 @@ EOF
     chmod 0640 /var/lib/pgadmin4.db.bak
 
     # pgadmin4-server = pgAdmin web app + bundled venv at /usr/pgadmin4/venv,
-    # WITHOUT apache2 / mod_wsgi as dependencies. Unlike pgadmin4-web, this
-    # package's postinst does NOT create the admin user — we have to run
-    # setup-db + add-user ourselves. (Otherwise pgAdmin4 enters interactive
-    # first-run flow at first request and crashes with EOFError under gunicorn.)
-    apt_install "pgadmin4-server" pgadmin4-server || exit 1
+    # WITHOUT apache2 / mod_wsgi as dependencies.
+    #
+    # The pgAdmin code (specifically migrations/versions/fdc58d9bd449_.py via
+    # user_info.user_info_server) reads PGADMIN_SETUP_EMAIL/PASSWORD env vars
+    # to provision the first admin user; if either is unset it calls input()
+    # which blocks under apt and EOFErrors under gunicorn. Export them before
+    # apt_install so the package's setup phase picks them up, then re-pass
+    # them to setup-db (which runs the migrations explicitly).
+    export PGADMIN_SETUP_EMAIL="$PGADMIN4_EMAIL"
+    export PGADMIN_SETUP_PASSWORD="$PGADMIN4_PASS"
+    apt_install "pgadmin4-server" pgadmin4-server || {
+        unset PGADMIN_SETUP_EMAIL PGADMIN_SETUP_PASSWORD; exit 1; }
 
-    sudo -u www-data PYTHONPATH=/usr/pgadmin4/web \
+    sudo -u www-data \
+        PGADMIN_SETUP_EMAIL="$PGADMIN4_EMAIL" \
+        PGADMIN_SETUP_PASSWORD="$PGADMIN4_PASS" \
+        PYTHONPATH=/usr/pgadmin4/web \
         /usr/pgadmin4/venv/bin/python3 /usr/pgadmin4/web/setup.py setup-db >> $LOG_FILE 2>&1 || {
+            unset PGADMIN_SETUP_EMAIL PGADMIN_SETUP_PASSWORD
             echo "ERROR: pgAdmin4 setup-db failed (see $LOG_FILE)" | tee -a $LOG_FILE
             exit 1
         }
-    sudo -u www-data PYTHONPATH=/usr/pgadmin4/web \
-        /usr/pgadmin4/venv/bin/python3 /usr/pgadmin4/web/setup.py \
-        add-user "$PGADMIN4_EMAIL" "$PGADMIN4_PASS" --admin >> $LOG_FILE 2>&1 || {
-            echo "ERROR: pgAdmin4 add-user failed (see $LOG_FILE)" | tee -a $LOG_FILE
-            exit 1
-        }
+
+    unset PGADMIN_SETUP_EMAIL PGADMIN_SETUP_PASSWORD
 
     # Gunicorn lives in the bundled venv so it picks up the right Python deps.
     /usr/pgadmin4/venv/bin/pip install --quiet gunicorn >> $LOG_FILE 2>&1 || {
