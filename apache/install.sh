@@ -3,7 +3,8 @@
 # Apache Web Server Setup Script (PHP-FPM + DB choice)
 #
 # Stack: Apache 2.4 (MPM Event) + PHP-FPM + (MariaDB|PostgreSQL) +
-#        (phpMyAdmin|phpPgAdmin) + HTTP/2 + mod_remoteip (Cloudflare)
+#        DB admin UI (phpMyAdmin|Adminer for MariaDB; Adminer|pgAdmin4 for PG) +
+#        HTTP/2 + mod_remoteip (Cloudflare)
 #
 # Supported distributions:
 #   - Debian 12 (bookworm)        — uses sury.org repo for PHP 8.4
@@ -19,13 +20,16 @@
 #
 # Non-interactive (env vars):
 #   curl -fsSL .../install.sh | \
-#     DATABASE=mariadb MYSQL_ROOT='Pass!' PHPMYADMIN_DIR='myadmin' bash
+#     DATABASE=mariadb MYSQL_ROOT='Pass!' DB_UI=phpmyadmin PHPMYADMIN_DIR='myadmin' bash
 #   curl -fsSL .../install.sh | \
-#     DATABASE=pgsql PG_PASS='Pass!' PHPPGADMIN_DIR='mypga' bash
+#     DATABASE=pgsql PG_PASS='Pass!' DB_UI=adminer ADMINER_DIR='myadm' bash
+#   curl -fsSL .../install.sh | \
+#     DATABASE=pgsql PG_PASS='Pass!' DB_UI=pgadmin4 PGADMIN4_DIR='pga' \
+#     PGADMIN4_EMAIL='admin@example.com' PGADMIN4_PASS='Pass!' bash
 #
 # Override PHP version: PHP_VER=8.5 ...
 #
-# Version: 4.0
+# Version: 4.2
 # =============================================================================
 
 set -u
@@ -109,22 +113,27 @@ esac
 
 # Choice of web admin UI:
 #   - mariadb: phpMyAdmin (default) OR Adminer
-#   - pgsql:   Adminer (forced — phpPgAdmin is dead, supports PG <=13 only)
+#   - pgsql:   Adminer (default, single PHP file) OR pgAdmin4 (full-featured, mod_wsgi)
 if [ "$DATABASE" = "mariadb" ]; then
     ask DB_UI "DB admin UI [phpmyadmin|adminer]: "
     DB_UI=$(echo "${DB_UI:-phpmyadmin}" | tr '[:upper:]' '[:lower:]')
     case "$DB_UI" in
-        phpmyadmin|pma)         DB_UI=phpmyadmin ;;
-        adminer)                DB_UI=adminer ;;
+        phpmyadmin|pma) DB_UI=phpmyadmin ;;
+        adminer)        DB_UI=adminer ;;
         *) echo "ERROR: unknown DB_UI='$DB_UI' (use 'phpmyadmin' or 'adminer')"; exit 1 ;;
     esac
 else
-    DB_UI=adminer
-    echo "Database is PostgreSQL — admin UI forced to Adminer (single PHP file, supports all PG versions)."
+    ask DB_UI "DB admin UI [adminer|pgadmin4]: "
+    DB_UI=$(echo "${DB_UI:-adminer}" | tr '[:upper:]' '[:lower:]')
+    case "$DB_UI" in
+        adminer)          DB_UI=adminer ;;
+        pgadmin4|pgadmin) DB_UI=pgadmin4 ;;
+        *) echo "ERROR: unknown DB_UI='$DB_UI' (use 'adminer' or 'pgadmin4')"; exit 1 ;;
+    esac
 fi
 
 echo "============================================================"
-echo " Web server install — version 4.1 (Apache stack)"
+echo " Web server install — version 4.2 (Apache stack)"
 echo " Detected: $PRETTY_NAME ($DISTRO_CODENAME)"
 echo " Target  : Apache + PHP-FPM ${PHP_VER} + ${DATABASE} +"
 echo "           ${DB_UI} + HTTP/2 + mod_remoteip"
@@ -138,15 +147,31 @@ else
     [ -z "${PG_PASS:-}" ] && { echo "Password can't be blank"; exit 1; }
 fi
 
-if [ "$DB_UI" = "phpmyadmin" ]; then
-    ask PHPMYADMIN_DIR "Enter phpMyAdmin path alias: "
-    [ -z "${PHPMYADMIN_DIR:-}" ] && { echo "phpMyAdmin alias can't be blank"; exit 1; }
-    DB_UI_DIR="$PHPMYADMIN_DIR"
-else
-    ask ADMINER_DIR "Enter Adminer path alias: "
-    [ -z "${ADMINER_DIR:-}" ] && { echo "Adminer alias can't be blank"; exit 1; }
-    DB_UI_DIR="$ADMINER_DIR"
-fi
+case "$DB_UI" in
+    phpmyadmin)
+        ask PHPMYADMIN_DIR "Enter phpMyAdmin path alias: "
+        [ -z "${PHPMYADMIN_DIR:-}" ] && { echo "phpMyAdmin alias can't be blank"; exit 1; }
+        DB_UI_DIR="$PHPMYADMIN_DIR"
+        ;;
+    adminer)
+        ask ADMINER_DIR "Enter Adminer path alias: "
+        [ -z "${ADMINER_DIR:-}" ] && { echo "Adminer alias can't be blank"; exit 1; }
+        DB_UI_DIR="$ADMINER_DIR"
+        ;;
+    pgadmin4)
+        ask PGADMIN4_DIR "Enter pgAdmin4 path alias: "
+        [ -z "${PGADMIN4_DIR:-}" ] && { echo "pgAdmin4 alias can't be blank"; exit 1; }
+        DB_UI_DIR="$PGADMIN4_DIR"
+        ask PGADMIN4_EMAIL "Enter pgAdmin4 admin email: "
+        [ -z "${PGADMIN4_EMAIL:-}" ] && { echo "pgAdmin4 email can't be blank"; exit 1; }
+        ask PGADMIN4_PASS "Enter pgAdmin4 admin password (blank = auto-generate): "
+        if [ -z "${PGADMIN4_PASS:-}" ]; then
+            PGADMIN4_PASS=$(openssl rand -base64 18 2>/dev/null | tr -d '/+=' | head -c 24)
+            PGADMIN4_PASS_GENERATED=yes
+            echo "  pgAdmin4 password (auto-generated): $PGADMIN4_PASS"
+        fi
+        ;;
+esac
 
 BLOWFISH_SECRET=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
 
@@ -305,7 +330,7 @@ EOF
 fi
 
 # =============================================================================
-# Install web admin UI — phpMyAdmin (MariaDB only) OR Adminer (any DB)
+# Install web admin UI — phpMyAdmin (MariaDB) | Adminer (any DB) | pgAdmin4 (PG)
 # =============================================================================
 if [ "$DB_UI" = "phpmyadmin" ]; then
     # ---------- phpMyAdmin ----------
@@ -403,7 +428,7 @@ EOF
 EOF
     chown www-data:www-data /usr/share/phpmyadmin/config.inc.php
     a2enconf phpmyadmin >> $LOG_FILE 2>&1
-else
+elif [ "$DB_UI" = "adminer" ]; then
     # ---------- Adminer ----------
     # Single PHP file — supports MySQL/MariaDB, PostgreSQL, SQLite, MSSQL, Oracle.
     # Active dev (5.x line, 2024+), drop-in replacement for phpMyAdmin and the
@@ -459,6 +484,60 @@ Alias /$ADMINER_DIR /usr/share/adminer
 </Directory>
 EOF
     a2enconf adminer >> $LOG_FILE 2>&1
+else
+    # ---------- pgAdmin4 (Apache + mod_wsgi) ----------
+    # Installed from the official pgadmin.org apt repo. The 'pgadmin4-web'
+    # metapackage pulls in pgadmin4-server + libapache2-mod-wsgi-py3 and ships
+    # a setup-web.sh that initialises the SQLite metadata DB and registers an
+    # Apache conf at /etc/apache2/conf-available/pgadmin4.conf. We run it
+    # non-interactively (PGADMIN_SETUP_EMAIL/PASSWORD env vars + --yes), then
+    # overwrite that conf so the alias matches the user-chosen $PGADMIN4_DIR
+    # instead of the default /pgadmin4.
+    echo "Installing pgAdmin4 (apt repo + mod_wsgi)..." | tee -a $LOG_FILE
+
+    # pgadmin.org apt repo only publishes a subset of distro codenames. Map
+    # newer/unsupported releases to the closest published codename.
+    PGADMIN_CODENAME="$DISTRO_CODENAME"
+    case "$DISTRO_ID:$DISTRO_VER" in
+        debian:13)    PGADMIN_CODENAME="bookworm" ;;
+        ubuntu:26.04) PGADMIN_CODENAME="noble" ;;
+    esac
+
+    install -d -m 0755 /usr/share/keyrings
+    if ! curl -fsSL https://www.pgadmin.org/static/packages_pgadmin_org.pub \
+            | gpg --dearmor -o /usr/share/keyrings/pgadmin4-archive-keyring.gpg 2>>$LOG_FILE; then
+        echo "ERROR: failed to fetch pgAdmin4 GPG key" | tee -a $LOG_FILE
+        exit 1
+    fi
+    echo "deb [signed-by=/usr/share/keyrings/pgadmin4-archive-keyring.gpg] https://ftp.postgresql.org/pub/pgadmin/pgadmin4/apt/${PGADMIN_CODENAME} pgadmin4 main" \
+        > /etc/apt/sources.list.d/pgadmin4.list
+    apt-get update -y >> $LOG_FILE 2>&1
+
+    apt_install "pgadmin4-web" pgadmin4-web || exit 1
+
+    # Run the bundled setup script. PGADMIN_SETUP_EMAIL/PASSWORD are read by
+    # /usr/pgadmin4/web/setup.py to create the first admin user; --yes skips
+    # all interactive prompts (incl. the 'configure Apache?' question).
+    PGADMIN_SETUP_EMAIL="$PGADMIN4_EMAIL" \
+    PGADMIN_SETUP_PASSWORD="$PGADMIN4_PASS" \
+        /usr/pgadmin4/bin/setup-web.sh --yes >> $LOG_FILE 2>&1 || {
+            echo "ERROR: pgAdmin4 setup-web.sh failed (see $LOG_FILE)" | tee -a $LOG_FILE
+            exit 1
+        }
+
+    # Override the /pgadmin4 alias setup-web.sh just dropped in.
+    cat > /etc/apache2/conf-available/pgadmin4.conf <<EOF
+# pgAdmin4 served at /${PGADMIN4_DIR} (overrides setup-web.sh default of /pgadmin4)
+WSGIDaemonProcess pgadmin processes=1 threads=25 python-home=/usr/pgadmin4/venv
+WSGIScriptAlias /${PGADMIN4_DIR} /usr/pgadmin4/web/pgAdmin4.wsgi
+
+<Directory /usr/pgadmin4/web/>
+    WSGIProcessGroup pgadmin
+    WSGIApplicationGroup %{GLOBAL}
+    Require all granted
+</Directory>
+EOF
+    a2enconf pgadmin4 >> $LOG_FILE 2>&1
 fi
 
 # =============================================================================
@@ -648,6 +727,10 @@ cd - >/dev/null
     echo "PHP_VER=$PHP_VER"
     [ "$DB_UI" = "phpmyadmin" ] && echo "PHPMYADMIN_DIR=$PHPMYADMIN_DIR"
     [ "$DB_UI" = "adminer" ]    && echo "ADMINER_DIR=$ADMINER_DIR"
+    if [ "$DB_UI" = "pgadmin4" ]; then
+        echo "PGADMIN4_DIR=$PGADMIN4_DIR"
+        echo "PGADMIN4_EMAIL=$PGADMIN4_EMAIL"
+    fi
     echo "INSTALLED_AT=$(date -u +%FT%TZ)"
 } > "$STATE_FILE"
 chmod 644 "$STATE_FILE"
@@ -665,6 +748,12 @@ echo "Database        : ${DATABASE}"
 echo "DB Admin UI     : ${DB_UI}"
 echo "Cloudflare IPs  : mod_remoteip configured"
 echo "Admin URL       : http://<server>/${DB_UI_DIR}"
+if [ "$DB_UI" = "pgadmin4" ]; then
+    echo "pgAdmin4 login  : ${PGADMIN4_EMAIL}"
+    echo "pgAdmin4 pass   : ${PGADMIN4_PASS}"
+    [ "${PGADMIN4_PASS_GENERATED:-no}" = "yes" ] && \
+        echo "                  (auto-generated — copy this NOW, it's not stored anywhere else)"
+fi
 echo "State file      : $STATE_FILE"
 echo ""
 echo "Next: add a site with apache/add-site.sh"

@@ -86,14 +86,14 @@ echo "  Site users     : ${SITE_USERS[*]:-<none>}"
 echo "  PHP versions   : ${PHP_DIRS[*]:-<none>}"
 case "$DATABASE" in
     mariadb) echo "  Packages       : nginx*, php*, mariadb-*, mysql-*, phpmyadmin" ;;
-    pgsql)   echo "  Packages       : nginx*, php*, postgresql*, phpPgAdmin (manual files)" ;;
+    pgsql)   echo "  Packages       : nginx*, php*, postgresql*, pgadmin4*" ;;
     *)       echo "  Packages       : nginx*, php*" ;;
 esac
 [ "${KEEP_PACKAGES:-no}" = "yes" ] && echo "                   (skipped — KEEP_PACKAGES=yes)"
 echo "  Config dirs    : /etc/nginx  /etc/php"
 [ "$DATABASE" = "mariadb" ] && echo "                   /etc/mysql"
 [ "$DATABASE" = "pgsql" ]   && echo "                   /etc/postgresql"
-echo "  Data dirs      : /usr/share/phpmyadmin  /usr/share/phppgadmin  /usr/share/adminer  (whichever exists)"
+echo "  Data dirs      : /usr/share/phpmyadmin  /usr/share/adminer  /usr/pgadmin4  (whichever exists)"
 [ "$DATABASE" = "mariadb" ] && echo "                   /var/lib/mysql"
 [ "$DATABASE" = "pgsql" ]   && echo "                   /var/lib/postgresql"
 echo "  Site files     : /www  (everything inside)"
@@ -122,6 +122,8 @@ echo "=============================================="
 # 1. Stop services
 echo "Stopping services..."
 systemctl stop nginx 2>/dev/null || true
+systemctl stop pgadmin4 2>/dev/null || true
+systemctl disable pgadmin4 2>/dev/null || true
 [ "$DATABASE" = "mariadb" ] && systemctl stop mariadb 2>/dev/null || true
 [ "$DATABASE" = "pgsql"   ] && systemctl stop postgresql 2>/dev/null || true
 for v in "${PHP_DIRS[@]}"; do systemctl stop "php${v}-fpm" 2>/dev/null || true; done
@@ -141,7 +143,7 @@ if [ "${KEEP_PACKAGES:-no}" != "yes" ]; then
             apt-get purge -y 'mariadb-*' 'mysql-*' phpmyadmin >/dev/null 2>&1 || true
             ;;
         pgsql)
-            apt-get purge -y 'postgresql*' >/dev/null 2>&1 || true
+            apt-get purge -y 'postgresql*' 'pgadmin4*' >/dev/null 2>&1 || true
             ;;
     esac
     if [ "${DELETE_CERTS:-no}" = "yes" ]; then
@@ -154,12 +156,17 @@ fi
 echo "Removing config and data directories..."
 rm -rf /etc/nginx /etc/php
 [ "$DATABASE" = "mariadb" ] && rm -rf /etc/mysql /var/lib/mysql /var/lib/phpmyadmin /usr/share/phpmyadmin
-[ "$DATABASE" = "pgsql"   ] && rm -rf /etc/postgresql /var/lib/postgresql /usr/share/phppgadmin /var/lib/phppgadmin
+[ "$DATABASE" = "pgsql"   ] && rm -rf /etc/postgresql /var/lib/postgresql
 # Adminer (used for either DB) and any leftover phpPgAdmin from older installs
 rm -rf /usr/share/adminer /usr/share/phppgadmin /var/lib/phppgadmin
+# pgAdmin4 (Nginx stack uses pgadmin4-server + gunicorn systemd unit)
+rm -rf /usr/pgadmin4 /etc/pgadmin /var/lib/pgadmin /var/log/pgadmin /run/pgadmin4
+rm -f  /etc/systemd/system/pgadmin4.service
+rm -f  /etc/apt/sources.list.d/pgadmin4.list /usr/share/keyrings/pgadmin4-archive-keyring.gpg
 rm -rf /run/php /var/log/nginx
 rm -f  /etc/apt/sources.list.d/php.list /etc/apt/trusted.gpg.d/php.gpg
 rm -f  /etc/apt/sources.list.d/ondrej-*.list /etc/apt/sources.list.d/ondrej-*.sources
+systemctl daemon-reload 2>/dev/null || true
 
 for s in "${SITES[@]}"; do
     rm -f "/etc/cron.d/php-sessions-${s}"
@@ -198,7 +205,7 @@ echo "=============================================="
 echo " Uninstall complete."
 echo "=============================================="
 echo ""
-remaining=$(dpkg -l 2>/dev/null | grep -E '^ii\s+(php|nginx|mariadb-server|postgresql|phpmyadmin)' | awk '{print $2}')
+remaining=$(dpkg -l 2>/dev/null | grep -E '^ii\s+(php|nginx|mariadb-server|postgresql|phpmyadmin|pgadmin4)' | awk '{print $2}')
 if [ -n "$remaining" ]; then
     echo "WARNING: some packages remain installed:"
     echo "$remaining" | sed 's/^/    /'
@@ -209,7 +216,7 @@ echo ""
 echo "  ✓ /etc/nginx /etc/php removed"
 [ "$DATABASE" = "mariadb" ] && echo "  ✓ /etc/mysql /var/lib/mysql removed"
 [ "$DATABASE" = "pgsql"   ] && echo "  ✓ /etc/postgresql /var/lib/postgresql removed"
-echo "  ✓ /usr/share/{phpmyadmin,phppgadmin,adminer} removed (whichever existed)"
+echo "  ✓ /usr/share/{phpmyadmin,adminer} + /usr/pgadmin4 removed (whichever existed)"
 echo "  ✓ /www removed"
 echo "  ✓ www-data system user preserved"
 [ "${DELETE_CERTS:-no}" = "yes" ] && echo "  ✓ /etc/letsencrypt removed"

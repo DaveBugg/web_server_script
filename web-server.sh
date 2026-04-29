@@ -66,6 +66,7 @@ detect_state() {
     if [ -z "${DB_UI:-}" ]; then
         if   [ -d /usr/share/phpmyadmin ]; then DB_UI=phpmyadmin
         elif [ -d /usr/share/adminer ];    then DB_UI=adminer
+        elif [ -d /usr/pgadmin4 ];         then DB_UI=pgadmin4
         fi
     fi
 
@@ -147,8 +148,8 @@ fresh_install_flow() {
 
     echo ""
     echo "Database:"
-    echo "  ${C_GREEN}1)${C_RESET} MariaDB    (with phpMyAdmin)"
-    echo "  ${C_GREEN}2)${C_RESET} PostgreSQL (with phpPgAdmin)"
+    echo "  ${C_GREEN}1)${C_RESET} MariaDB    (admin UI: phpMyAdmin or Adminer)"
+    echo "  ${C_GREEN}2)${C_RESET} PostgreSQL (admin UI: Adminer or pgAdmin4)"
     local db_choice
     read -u 3 -r -p "Select database [1-2]: " db_choice
     case "$db_choice" in
@@ -171,7 +172,7 @@ show_menu() {
     cat <<EOF
 
 ${C_BOLD}=================================================================${C_RESET}
-${C_BOLD}  Web Server Manager${C_RESET}  ${C_DIM}v4.0${C_RESET}
+${C_BOLD}  Web Server Manager${C_RESET}  ${C_DIM}v4.2${C_RESET}
 ${C_BOLD}=================================================================${C_RESET}
   System    : ${OS_PRETTY:-unknown}
   Web server: ${WEB_SERVER:-<none>}  ($WEB_STATE)

@@ -2,7 +2,8 @@
 # =============================================================================
 # Nginx Web Server Setup Script (PHP-FPM + DB choice)
 #
-# Stack: Nginx + PHP-FPM + (MariaDB|PostgreSQL) + (phpMyAdmin|phpPgAdmin) +
+# Stack: Nginx + PHP-FPM + (MariaDB|PostgreSQL) +
+#        DB admin UI (phpMyAdmin|Adminer for MariaDB; Adminer|pgAdmin4 for PG) +
 #        HTTP/2 + Cloudflare real-IP via set_real_ip_from
 #
 # Supported: Debian 12/13, Ubuntu 22.04/24.04/26.04 (same PHP repo logic as
@@ -13,11 +14,14 @@
 #
 # Non-interactive:
 #   curl -fsSL .../install.sh | \
-#     DATABASE=mariadb MYSQL_ROOT='Pass!' PHPMYADMIN_DIR='myadmin' bash
+#     DATABASE=mariadb MYSQL_ROOT='Pass!' DB_UI=phpmyadmin PHPMYADMIN_DIR='myadmin' bash
 #   curl -fsSL .../install.sh | \
-#     DATABASE=pgsql PG_PASS='Pass!' PHPPGADMIN_DIR='mypga' bash
+#     DATABASE=pgsql PG_PASS='Pass!' DB_UI=adminer ADMINER_DIR='myadm' bash
+#   curl -fsSL .../install.sh | \
+#     DATABASE=pgsql PG_PASS='Pass!' DB_UI=pgadmin4 PGADMIN4_DIR='pga' \
+#     PGADMIN4_EMAIL='admin@example.com' PGADMIN4_PASS='Pass!' bash
 #
-# Version: 4.0
+# Version: 4.2
 # =============================================================================
 
 set -u
@@ -100,7 +104,7 @@ esac
 
 # Choice of web admin UI:
 #   - mariadb: phpMyAdmin (default) OR Adminer
-#   - pgsql:   Adminer (forced — phpPgAdmin is dead, supports PG <=13 only)
+#   - pgsql:   Adminer (default, single PHP file) OR pgAdmin4 (gunicorn + reverse proxy)
 if [ "$DATABASE" = "mariadb" ]; then
     ask DB_UI "DB admin UI [phpmyadmin|adminer]: "
     DB_UI=$(echo "${DB_UI:-phpmyadmin}" | tr '[:upper:]' '[:lower:]')
@@ -110,12 +114,17 @@ if [ "$DATABASE" = "mariadb" ]; then
         *) echo "ERROR: unknown DB_UI='$DB_UI' (use 'phpmyadmin' or 'adminer')"; exit 1 ;;
     esac
 else
-    DB_UI=adminer
-    echo "Database is PostgreSQL — admin UI forced to Adminer (single PHP file, supports all PG versions)."
+    ask DB_UI "DB admin UI [adminer|pgadmin4]: "
+    DB_UI=$(echo "${DB_UI:-adminer}" | tr '[:upper:]' '[:lower:]')
+    case "$DB_UI" in
+        adminer)          DB_UI=adminer ;;
+        pgadmin4|pgadmin) DB_UI=pgadmin4 ;;
+        *) echo "ERROR: unknown DB_UI='$DB_UI' (use 'adminer' or 'pgadmin4')"; exit 1 ;;
+    esac
 fi
 
 echo "============================================================"
-echo " Web server install — version 4.1 (Nginx stack)"
+echo " Web server install — version 4.2 (Nginx stack)"
 echo " Detected: $PRETTY_NAME ($DISTRO_CODENAME)"
 echo " Target  : Nginx + PHP-FPM ${PHP_VER} + ${DATABASE} +"
 echo "           ${DB_UI} + HTTP/2 + Cloudflare real-IP"
@@ -129,15 +138,31 @@ else
     [ -z "${PG_PASS:-}" ] && { echo "Password can't be blank"; exit 1; }
 fi
 
-if [ "$DB_UI" = "phpmyadmin" ]; then
-    ask PHPMYADMIN_DIR "Enter phpMyAdmin path alias: "
-    [ -z "${PHPMYADMIN_DIR:-}" ] && { echo "phpMyAdmin alias can't be blank"; exit 1; }
-    DB_UI_DIR="$PHPMYADMIN_DIR"
-else
-    ask ADMINER_DIR "Enter Adminer path alias: "
-    [ -z "${ADMINER_DIR:-}" ] && { echo "Adminer alias can't be blank"; exit 1; }
-    DB_UI_DIR="$ADMINER_DIR"
-fi
+case "$DB_UI" in
+    phpmyadmin)
+        ask PHPMYADMIN_DIR "Enter phpMyAdmin path alias: "
+        [ -z "${PHPMYADMIN_DIR:-}" ] && { echo "phpMyAdmin alias can't be blank"; exit 1; }
+        DB_UI_DIR="$PHPMYADMIN_DIR"
+        ;;
+    adminer)
+        ask ADMINER_DIR "Enter Adminer path alias: "
+        [ -z "${ADMINER_DIR:-}" ] && { echo "Adminer alias can't be blank"; exit 1; }
+        DB_UI_DIR="$ADMINER_DIR"
+        ;;
+    pgadmin4)
+        ask PGADMIN4_DIR "Enter pgAdmin4 path alias: "
+        [ -z "${PGADMIN4_DIR:-}" ] && { echo "pgAdmin4 alias can't be blank"; exit 1; }
+        DB_UI_DIR="$PGADMIN4_DIR"
+        ask PGADMIN4_EMAIL "Enter pgAdmin4 admin email: "
+        [ -z "${PGADMIN4_EMAIL:-}" ] && { echo "pgAdmin4 email can't be blank"; exit 1; }
+        ask PGADMIN4_PASS "Enter pgAdmin4 admin password (blank = auto-generate): "
+        if [ -z "${PGADMIN4_PASS:-}" ]; then
+            PGADMIN4_PASS=$(openssl rand -base64 18 2>/dev/null | tr -d '/+=' | head -c 24)
+            PGADMIN4_PASS_GENERATED=yes
+            echo "  pgAdmin4 password (auto-generated): $PGADMIN4_PASS"
+        fi
+        ;;
+esac
 
 BLOWFISH_SECRET=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
 
@@ -352,7 +377,7 @@ EOF
 sed -i 's|^# server_tokens off;|server_tokens off;|' /etc/nginx/nginx.conf 2>/dev/null || true
 
 # =============================================================================
-# Install web admin UI — phpMyAdmin (MariaDB only) OR Adminer (any DB)
+# Install web admin UI — phpMyAdmin (MariaDB) | Adminer (any DB) | pgAdmin4 (PG)
 # =============================================================================
 if [ "$DB_UI" = "phpmyadmin" ]; then
     # ---------- phpMyAdmin ----------
@@ -451,7 +476,7 @@ location /${PHPMYADMIN_DIR} {
     }
 }
 EOF
-else
+elif [ "$DB_UI" = "adminer" ]; then
     # ---------- Adminer ----------
     # Single PHP file — supports MySQL/MariaDB, PostgreSQL, SQLite, MSSQL, Oracle.
     # Active dev (5.x line, 2024+), drop-in replacement for phpMyAdmin and the
@@ -505,6 +530,129 @@ location /${ADMINER_DIR} {
         fastcgi_param SCRIPT_FILENAME \$request_filename;
         include       fastcgi_params;
     }
+}
+EOF
+else
+    # ---------- pgAdmin4 (Nginx + gunicorn over unix socket) ----------
+    # Apache uses pgadmin4-web (mod_wsgi) — but that pulls apache2 as a hard
+    # dependency. For Nginx we install pgadmin4-server (the same /usr/pgadmin4
+    # tree, just without the apache wsgi conf), then run it under gunicorn as
+    # a systemd unit and reverse-proxy from nginx via a unix socket.
+    #
+    # Sub-path mounting (the past pain point — login bouncing back to /login):
+    # we set APPLICATION_ROOT in /etc/pgadmin/config_system.py AND pass
+    # X-Script-Name through the proxy so flask-login generates correct cookie
+    # paths and CSRF tokens.
+    echo "Installing pgAdmin4 (apt repo + gunicorn + nginx reverse proxy)..." | tee -a $LOG_FILE
+
+    # pgadmin.org apt repo only publishes a subset of distro codenames.
+    PGADMIN_CODENAME="$DISTRO_CODENAME"
+    case "$DISTRO_ID:$DISTRO_VER" in
+        debian:13)    PGADMIN_CODENAME="bookworm" ;;
+        ubuntu:26.04) PGADMIN_CODENAME="noble" ;;
+    esac
+
+    install -d -m 0755 /usr/share/keyrings
+    if ! curl -fsSL https://www.pgadmin.org/static/packages_pgadmin_org.pub \
+            | gpg --dearmor -o /usr/share/keyrings/pgadmin4-archive-keyring.gpg 2>>$LOG_FILE; then
+        echo "ERROR: failed to fetch pgAdmin4 GPG key" | tee -a $LOG_FILE
+        exit 1
+    fi
+    echo "deb [signed-by=/usr/share/keyrings/pgadmin4-archive-keyring.gpg] https://ftp.postgresql.org/pub/pgadmin/pgadmin4/apt/${PGADMIN_CODENAME} pgadmin4 main" \
+        > /etc/apt/sources.list.d/pgadmin4.list
+    apt-get update -y >> $LOG_FILE 2>&1
+
+    # pgadmin4-server = pgAdmin web app + bundled venv at /usr/pgadmin4/venv,
+    # WITHOUT apache2 / mod_wsgi as dependencies.
+    apt_install "pgadmin4-server" pgadmin4-server || exit 1
+
+    # Server-mode config + sub-path mounting.
+    install -d -m 0755 /etc/pgadmin
+    cat > /etc/pgadmin/config_system.py <<EOF
+import os
+SERVER_MODE = True
+DATA_DIR = '/var/lib/pgadmin'
+LOG_FILE = '/var/log/pgadmin/pgadmin4.log'
+SQLITE_PATH = os.path.join(DATA_DIR, 'pgadmin4.db')
+SESSION_DB_PATH = os.path.join(DATA_DIR, 'sessions')
+STORAGE_DIR = os.path.join(DATA_DIR, 'storage')
+DEFAULT_BINARY_PATHS = {'pg': '/usr/bin'}
+APPLICATION_ROOT = '/${PGADMIN4_DIR}'
+SESSION_COOKIE_PATH = '/${PGADMIN4_DIR}'
+EOF
+
+    install -d -m 0750 -o www-data -g www-data /var/lib/pgadmin
+    install -d -m 0750 -o www-data -g www-data /var/lib/pgadmin/sessions
+    install -d -m 0750 -o www-data -g www-data /var/lib/pgadmin/storage
+    install -d -m 0750 -o www-data -g www-data /var/log/pgadmin
+
+    # Initialise SQLite metadata DB and create the first admin user. setup.py
+    # (when called with no subcommand) reads PGADMIN_SETUP_EMAIL/PASSWORD from
+    # the environment to provision the initial user non-interactively.
+    sudo -u www-data \
+        PGADMIN_SETUP_EMAIL="$PGADMIN4_EMAIL" \
+        PGADMIN_SETUP_PASSWORD="$PGADMIN4_PASS" \
+        /usr/pgadmin4/venv/bin/python3 /usr/pgadmin4/web/setup.py >> $LOG_FILE 2>&1 || {
+            echo "ERROR: pgAdmin4 setup.py failed (see $LOG_FILE)" | tee -a $LOG_FILE
+            exit 1
+        }
+
+    # Gunicorn lives in the bundled venv so it picks up the right Python deps.
+    /usr/pgadmin4/venv/bin/pip install --quiet gunicorn >> $LOG_FILE 2>&1 || {
+        echo "ERROR: failed to install gunicorn into pgadmin4 venv" | tee -a $LOG_FILE
+        exit 1
+    }
+
+    cat > /etc/systemd/system/pgadmin4.service <<EOF
+[Unit]
+Description=pgAdmin4 (gunicorn behind nginx)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+RuntimeDirectory=pgadmin4
+RuntimeDirectoryMode=0755
+WorkingDirectory=/usr/pgadmin4/web
+Environment=PYTHONPATH=/usr/pgadmin4/web
+ExecStart=/usr/pgadmin4/venv/bin/gunicorn \\
+    --workers 2 --threads 25 \\
+    --bind unix:/run/pgadmin4/socket \\
+    --umask 0007 \\
+    --access-logfile /var/log/pgadmin/access.log \\
+    --error-logfile /var/log/pgadmin/error.log \\
+    pgAdmin4:app
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now pgadmin4 >> $LOG_FILE 2>&1 || {
+        echo "ERROR: failed to start pgadmin4.service (see journalctl -u pgadmin4)" | tee -a $LOG_FILE
+        exit 1
+    }
+
+    # nginx vhost-included snippet. Note the trailing slash on proxy_pass
+    # (`...:/`): combined with the trailing slash in `location /<dir>/` it
+    # strips the prefix before forwarding so gunicorn sees `/login` not
+    # `/<dir>/login` — and APPLICATION_ROOT + X-Script-Name handle URL
+    # generation back to the client.
+    cat > /etc/nginx/snippets/admin-ui.conf <<EOF
+# pgAdmin4: served at /${PGADMIN4_DIR}
+location = /${PGADMIN4_DIR} { return 301 /${PGADMIN4_DIR}/; }
+location /${PGADMIN4_DIR}/ {
+    proxy_pass http://unix:/run/pgadmin4/socket:/;
+    proxy_set_header Host \$http_host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Script-Name /${PGADMIN4_DIR};
+    proxy_redirect off;
+    proxy_buffering off;
+    client_max_body_size 50M;
 }
 EOF
 fi
@@ -609,6 +757,10 @@ cd - >/dev/null
     echo "PHP_VER=$PHP_VER"
     [ "$DB_UI" = "phpmyadmin" ] && echo "PHPMYADMIN_DIR=$PHPMYADMIN_DIR"
     [ "$DB_UI" = "adminer" ]    && echo "ADMINER_DIR=$ADMINER_DIR"
+    if [ "$DB_UI" = "pgadmin4" ]; then
+        echo "PGADMIN4_DIR=$PGADMIN4_DIR"
+        echo "PGADMIN4_EMAIL=$PGADMIN4_EMAIL"
+    fi
     echo "INSTALLED_AT=$(date -u +%FT%TZ)"
 } > "$STATE_FILE"
 chmod 644 "$STATE_FILE"
@@ -625,6 +777,12 @@ echo "Database        : ${DATABASE}"
 echo "DB Admin UI     : ${DB_UI}"
 echo "Cloudflare IPs  : set_real_ip_from configured (snippets/cloudflare-realip.conf)"
 echo "Admin URL       : http://<server>/${DB_UI_DIR}"
+if [ "$DB_UI" = "pgadmin4" ]; then
+    echo "pgAdmin4 login  : ${PGADMIN4_EMAIL}"
+    echo "pgAdmin4 pass   : ${PGADMIN4_PASS}"
+    [ "${PGADMIN4_PASS_GENERATED:-no}" = "yes" ] && \
+        echo "                  (auto-generated — copy this NOW, it's not stored anywhere else)"
+fi
 echo "State file      : $STATE_FILE"
 echo ""
 echo "Next: add a site with nginx/add-site.sh"
