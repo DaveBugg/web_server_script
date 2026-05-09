@@ -462,9 +462,13 @@ EOF
     # individually. This is the only reliable way to combine `alias` + PHP-FPM
     # in nginx — the more obvious `location ~ ^/<alias>/(.*)` pattern breaks
     # \$request_filename and FPM gets "Primary script unknown".
+    # ^~ modifier: this prefix location wins over any regex location in the
+    # parent vhost (e.g. add-site.sh's `location ~* \\.(css|js|...)$` static
+    # assets block, which would otherwise hijack /<alias>/*.js requests and
+    # try_files them out of /www/<domain>/www, returning 404).
     cat > /etc/nginx/snippets/admin-ui.conf <<EOF
 # phpMyAdmin: served at /${PHPMYADMIN_DIR}
-location /${PHPMYADMIN_DIR} {
+location ^~ /${PHPMYADMIN_DIR} {
     alias /usr/share/phpmyadmin/;
     index index.php;
 
@@ -526,11 +530,11 @@ php_admin_value[post_max_size] = 32M
 php_admin_value[upload_max_filesize] = 32M
 EOF
 
-    # Adminer is a single .php file — simpler nginx pattern. Same alias+nested
-    # location used for phpMyAdmin works just as well, so we keep it consistent.
+    # Adminer is a single .php file — simpler nginx pattern. Same ^~ prefix
+    # modifier as phpmyadmin/pgadmin4 to override vhost regex locations.
     cat > /etc/nginx/snippets/admin-ui.conf <<EOF
 # Adminer: served at /${ADMINER_DIR}
-location /${ADMINER_DIR} {
+location ^~ /${ADMINER_DIR} {
     alias /usr/share/adminer/;
     index index.php;
 
@@ -674,10 +678,14 @@ EOF
     # strips the prefix before forwarding so gunicorn sees `/login` not
     # `/<dir>/login` — and APPLICATION_ROOT + X-Script-Name handle URL
     # generation back to the client.
+    # ^~ modifier: this prefix location wins over any regex location in the
+    # parent vhost (add-site.sh's static-asset regex would otherwise hijack
+    # /<alias>/static/*.js requests). Critical for pgAdmin4 because its
+    # entire React UI is loaded via /<alias>/static/js/generated/*.js.
     cat > /etc/nginx/snippets/admin-ui.conf <<EOF
 # pgAdmin4: served at /${PGADMIN4_DIR}
 location = /${PGADMIN4_DIR} { return 301 /${PGADMIN4_DIR}/; }
-location /${PGADMIN4_DIR}/ {
+location ^~ /${PGADMIN4_DIR}/ {
     proxy_pass http://unix:/run/pgadmin4/socket:/;
     proxy_set_header Host \$http_host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -685,7 +693,6 @@ location /${PGADMIN4_DIR}/ {
     proxy_set_header X-Forwarded-Proto \$scheme;
     proxy_set_header X-Script-Name /${PGADMIN4_DIR};
     proxy_redirect off;
-    proxy_buffering off;
     client_max_body_size 50M;
 }
 EOF
