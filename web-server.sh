@@ -16,7 +16,7 @@
 #   REPO_URL=https://raw.githubusercontent.com/myfork/web_server_script/dev \
 #     bash <(curl -fsSL "$REPO_URL/web-server.sh")
 #
-# Version: 4.0
+# Version: 4.2
 # =============================================================================
 
 REPO_URL="${REPO_URL:-https://raw.githubusercontent.com/DaveBugg/web_server_script/main}"

@@ -9,7 +9,7 @@ Universal LAMP / LEMP web-server installer and site manager for Debian / Ubuntu.
 - Database: **MariaDB** **or PostgreSQL**
 - DB admin UI:
   - MariaDB → choose **phpMyAdmin** *or* **Adminer**
-  - PostgreSQL → **Adminer** (forced — phpPgAdmin is dead, supports PG ≤ 13 only)
+  - PostgreSQL → choose **Adminer** *or* **pgAdmin4**
 
 PHP-FPM 8.4 (8.5 on Ubuntu 26.04 native), HTTP/2, Cloudflare real-IP, Composer, fail2ban included on every stack.
 
@@ -112,11 +112,22 @@ curl -fsSL .../apache/install.sh | \
   ADMINER_DIR='admdb' \
   bash
 
-# Install Nginx + PostgreSQL (always Adminer)
+# Install Nginx + PostgreSQL + Adminer
 curl -fsSL .../nginx/install.sh | \
   DATABASE=pgsql \
+  DB_UI=adminer \
   PG_PASS='SecurePg123!' \
   ADMINER_DIR='admdb' \
+  bash
+
+# Install Nginx + PostgreSQL + pgAdmin4
+curl -fsSL .../nginx/install.sh | \
+  DATABASE=pgsql \
+  DB_UI=pgadmin4 \
+  PG_PASS='SecurePg123!' \
+  PGADMIN4_DIR='pgadm' \
+  PGADMIN4_EMAIL='admin@example.com' \
+  PGADMIN4_PASS='PgAdminPass123!' \
   bash
 
 # Add site with auto-generated DB
@@ -165,7 +176,11 @@ curl -fsSL .../apache/install.sh | \
 - **phpMyAdmin** (latest from phpmyadmin.net, ~12 MB) on a dedicated PHP-FPM pool, served at `/<your-alias>`
 - or **Adminer** (single 500 KB PHP file, latest from adminer.org, MySQL/PG/SQLite/MSSQL/Oracle support) on its own pool
 
-**PostgreSQL stack adds:** `postgresql` + `postgresql-contrib` plus **Adminer** (forced — phpPgAdmin's last release supports PG 13 only and is unmaintained). `pg_hba.conf` is configured for scram-sha-256 password auth on localhost so Adminer can log in over TCP.
+**PostgreSQL stack adds:** `postgresql` + `postgresql-contrib` plus your choice of:
+- **Adminer** (single 500 KB PHP file, drop-in replacement for phpPgAdmin which only supports PG ≤ 13 and is unmaintained) on its own PHP-FPM pool
+- or **pgAdmin4** (full-featured GUI from the official pgadmin.org apt repo) — Apache uses `mod_wsgi`, Nginx uses gunicorn behind a reverse proxy on a unix socket
+
+`pg_hba.conf` is configured for scram-sha-256 password auth on localhost so the admin UI can log in over TCP.
 
 **`add-site.sh`** for each domain creates:
 

@@ -16,7 +16,7 @@
 #
 # Reads:  /etc/web_server_script.conf  → DATABASE, PHP_VER
 #
-# Version: 4.0
+# Version: 4.2
 # =============================================================================
 
 STATE_FILE="/etc/web_server_script.conf"
@@ -59,7 +59,7 @@ if [ -d /etc/apache2/sites-available ]; then
     for f in /etc/apache2/sites-available/*.conf; do
         [ -f "$f" ] || continue
         n=$(basename "$f" .conf)
-        case "$n" in 000-default|default-ssl|phpmyadmin|phppgadmin) continue ;; esac
+        case "$n" in 000-default|default-ssl|phpmyadmin|phppgadmin|adminer|pgadmin4) continue ;; esac
         SITES+=("$n")
     done
 fi

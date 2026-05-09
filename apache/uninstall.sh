@@ -17,7 +17,7 @@
 #
 # Reads:  /etc/web_server_script.conf  → DATABASE
 #
-# Version: 4.0
+# Version: 4.2
 # =============================================================================
 
 STATE_FILE="/etc/web_server_script.conf"
@@ -62,7 +62,7 @@ SITE_USERS=()
 for pool in /etc/php/*/fpm/pool.d/*.conf; do
     [ -f "$pool" ] || continue
     pname=$(basename "$pool" .conf)
-    case "$pname" in www|phpmyadmin|phppgadmin|adminer) continue ;; esac
+    case "$pname" in www|phpmyadmin|phppgadmin|adminer|pgadmin) continue ;; esac
     user=$(grep -E '^\s*user\s*=' "$pool" 2>/dev/null | head -1 | awk -F'=' '{print $2}' | xargs)
     if [ -n "$user" ] && [ "$user" != "www-data" ]; then
         SITE_USERS+=("$user")

@@ -13,12 +13,13 @@
 #
 # Env vars:
 #   DOMAIN, NEWUSER, SITE_PASS, SSL_SETUP (y/n), CERTBOT_EMAIL,
-#   ADDITIONAL_DOMAINS (comma list), PHP_VER (default from state file or 8.4),
+#   ADDITIONAL_DOMAINS (comma list), NO_WWW (yes -> skip -d www.DOMAIN),
+#   PHP_VER (default from state file or 8.4),
 #   CREATE_DB (yes/no), DB_NAME, DB_USER, DB_PASS (auto-generated if blank)
 #
 # Reads:  /etc/web_server_script.conf  → DATABASE, PHP_VER
 #
-# Version: 4.0
+# Version: 4.2
 # =============================================================================
 
 STATE_FILE="/etc/web_server_script.conf"
@@ -98,7 +99,13 @@ if [[ ${SSL_SETUP:-n} =~ ^[Yy]$ ]]; then
             echo "Email required. SSL setup skipped."
             SSL_SETUP="n"
         else
-            CERTBOT_DOMAINS="-d $DOMAIN -d www.$DOMAIN"
+            # NO_WWW=yes skips '-d www.<DOMAIN>' for hosts where the www
+            # subdomain has no DNS record (certbot would fail otherwise).
+            if [ "${NO_WWW:-no}" = "yes" ]; then
+                CERTBOT_DOMAINS="-d $DOMAIN"
+            else
+                CERTBOT_DOMAINS="-d $DOMAIN -d www.$DOMAIN"
+            fi
             if [ -z "${ADDITIONAL_DOMAINS+set}" ]; then
                 echo "Comma-separated subdomains (e.g. api,blog) — Enter to skip:"
                 ask ADDITIONAL_DOMAINS "Additional subdomains: "

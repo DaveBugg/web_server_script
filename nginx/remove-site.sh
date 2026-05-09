@@ -12,7 +12,7 @@
 #
 # Reads:  /etc/web_server_script.conf
 #
-# Version: 4.0
+# Version: 4.2
 # =============================================================================
 
 STATE_FILE="/etc/web_server_script.conf"

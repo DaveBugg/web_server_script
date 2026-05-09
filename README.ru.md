@@ -9,7 +9,7 @@
 - БД: **MariaDB** **или PostgreSQL**
 - Web-UI для БД:
   - MariaDB → выбор **phpMyAdmin** *или* **Adminer**
-  - PostgreSQL → **Adminer** (принудительно — phpPgAdmin поддерживает только PG ≤ 13 и заброшен)
+  - PostgreSQL → выбор **Adminer** *или* **pgAdmin4**
 
 В каждом стеке: PHP-FPM 8.4 (8.5 на Ubuntu 26.04 нативно), HTTP/2, реальные IP от Cloudflare, Composer, fail2ban.
 
@@ -111,11 +111,22 @@ curl -fsSL .../apache/install.sh | \
   ADMINER_DIR='admdb' \
   bash
 
-# Nginx + PostgreSQL (Adminer принудительно)
+# Nginx + PostgreSQL + Adminer
 curl -fsSL .../nginx/install.sh | \
   DATABASE=pgsql \
+  DB_UI=adminer \
   PG_PASS='SecurePg123!' \
   ADMINER_DIR='admdb' \
+  bash
+
+# Nginx + PostgreSQL + pgAdmin4
+curl -fsSL .../nginx/install.sh | \
+  DATABASE=pgsql \
+  DB_UI=pgadmin4 \
+  PG_PASS='SecurePg123!' \
+  PGADMIN4_DIR='pgadm' \
+  PGADMIN4_EMAIL='admin@example.com' \
+  PGADMIN4_PASS='PgAdminPass123!' \
   bash
 
 # Добавить сайт с автогенерацией пароля БД
@@ -164,7 +175,11 @@ curl -fsSL .../apache/install.sh | \
 - **phpMyAdmin** (последний с phpmyadmin.net, ~12 МБ) на отдельном PHP-FPM pool, доступ по `/<алиас>`
 - или **Adminer** (один PHP-файл ~500 КБ, последний с adminer.org, поддерживает MySQL/PG/SQLite/MSSQL/Oracle) на своём pool
 
-**Стек PostgreSQL добавляет:** `postgresql` + `postgresql-contrib` плюс **Adminer** (принудительно — phpPgAdmin поддерживает только PG ≤ 13 и заброшен). `pg_hba.conf` настраивается на scram-sha-256 пароль-аутентификацию для localhost, чтобы Adminer мог логиниться по TCP.
+**Стек PostgreSQL добавляет:** `postgresql` + `postgresql-contrib` плюс на выбор:
+- **Adminer** (один PHP-файл ~500 КБ, замена phpPgAdmin, который поддерживает только PG ≤ 13 и заброшен) на своём PHP-FPM pool
+- или **pgAdmin4** (полноценный GUI из официального apt-репо pgadmin.org) — Apache использует `mod_wsgi`, Nginx — gunicorn за reverse-proxy на unix-сокете
+
+`pg_hba.conf` настраивается на scram-sha-256 пароль-аутентификацию для localhost, чтобы admin UI мог логиниться по TCP.
 
 **`add-site.sh`** для каждого домена создаёт:
 

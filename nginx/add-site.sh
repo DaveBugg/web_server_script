@@ -11,9 +11,14 @@
 #     SSL_SETUP=y CERTBOT_EMAIL=admin@example.com \
 #     CREATE_DB=yes DB_NAME=example_db DB_USER=example_user bash
 #
+# Env vars:
+#   DOMAIN, NEWUSER, SITE_PASS, SSL_SETUP (y/n), CERTBOT_EMAIL,
+#   ADDITIONAL_DOMAINS (comma list), NO_WWW (yes -> skip -d www.DOMAIN),
+#   PHP_VER, CREATE_DB (yes/no), DB_NAME, DB_USER, DB_PASS
+#
 # Reads:  /etc/web_server_script.conf  → DATABASE, PHP_VER
 #
-# Version: 4.0
+# Version: 4.2
 # =============================================================================
 
 STATE_FILE="/etc/web_server_script.conf"
@@ -90,7 +95,13 @@ if [[ ${SSL_SETUP:-n} =~ ^[Yy]$ ]]; then
             echo "Email required. SSL setup skipped."
             SSL_SETUP="n"
         else
-            CERTBOT_DOMAINS="-d $DOMAIN -d www.$DOMAIN"
+            # NO_WWW=yes skips '-d www.<DOMAIN>' for hosts where the www
+            # subdomain has no DNS record (certbot would fail otherwise).
+            if [ "${NO_WWW:-no}" = "yes" ]; then
+                CERTBOT_DOMAINS="-d $DOMAIN"
+            else
+                CERTBOT_DOMAINS="-d $DOMAIN -d www.$DOMAIN"
+            fi
             if [ -z "${ADDITIONAL_DOMAINS+set}" ]; then
                 echo "Comma-separated subdomains (e.g. api,blog) — Enter to skip:"
                 ask ADDITIONAL_DOMAINS "Additional subdomains: "
@@ -186,13 +197,13 @@ EOF
 fi
 
 # =============================================================================
-# Determine which admin snippet to include in the vhost (so /<alias> works)
+# Include the admin UI snippet in this vhost so /<alias> works under any domain.
+# install.sh always writes a single /etc/nginx/snippets/admin-ui.conf regardless
+# of which UI was chosen (phpMyAdmin / Adminer / pgAdmin4).
 # =============================================================================
 ADMIN_INCLUDE=""
-[ "$DATABASE" = "mariadb" ] && [ -f /etc/nginx/snippets/admin-pma.conf ] && \
-    ADMIN_INCLUDE="include /etc/nginx/snippets/admin-pma.conf;"
-[ "$DATABASE" = "pgsql" ]   && [ -f /etc/nginx/snippets/admin-pga.conf ] && \
-    ADMIN_INCLUDE="include /etc/nginx/snippets/admin-pga.conf;"
+[ -f /etc/nginx/snippets/admin-ui.conf ] && \
+    ADMIN_INCLUDE="include /etc/nginx/snippets/admin-ui.conf;"
 
 # =============================================================================
 # Nginx server blocks
